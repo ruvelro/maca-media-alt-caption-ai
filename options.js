@@ -42,6 +42,11 @@ const els = {
   allowDecorativeAltEmpty: document.getElementById("allowDecorativeAltEmpty"),
   captionTemplateEnabled: document.getElementById("captionTemplateEnabled"),
   captionTemplate: document.getElementById("captionTemplate"),
+  contextMenuUseSignature: document.getElementById("contextMenuUseSignature"),
+  captionSignaturePreset: document.getElementById("captionSignaturePreset"),
+  captionSignatureName: document.getElementById("captionSignatureName"),
+  addSignature: document.getElementById("addSignature"),
+  deleteSignature: document.getElementById("deleteSignature"),
   captionSignatureText: document.getElementById("captionSignatureText"),
   autoCaptionSignatureOnAutoFill: document.getElementById("autoCaptionSignatureOnAutoFill"),
   debugEnabled: document.getElementById("debugEnabled"),
@@ -66,6 +71,7 @@ const LOCAL_PROVIDERS = new Set(["local_ollama", "local_openai"]);
 
 // Remember the user's sync preference for cloud providers when temporarily hiding the toggle on local providers.
 let lastCloudSyncApiKey = true;
+let signatureState = { list: [], activeId: "" };
 
 // Simple status helper (used by tools/debug buttons)
 function setStatus(msg, { timeoutMs = 2500 } = {}) {
@@ -260,6 +266,66 @@ function updateAutoFuseUi() {
   els.autoUploadSafetyFuseMaxQueued.style.opacity = on ? "1" : "0.65";
 }
 
+function makeSignatureId() {
+  try {
+    if (crypto?.randomUUID) return crypto.randomUUID();
+  } catch (_) {}
+  return `sig_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+}
+
+function normalizeSignatures(list, legacyText = "") {
+  const out = [];
+  const src = Array.isArray(list) ? list : [];
+  for (const it of src) {
+    if (!it || typeof it !== "object") continue;
+    const id = String(it.id || "").trim() || makeSignatureId();
+    const name = String(it.name || "").trim() || "Firma";
+    const text = String(it.text || "").trim();
+    out.push({ id, name, text });
+  }
+  if (!out.length) {
+    const legacy = String(legacyText || "").trim();
+    if (legacy) out.push({ id: "default", name: "Firma principal", text: legacy });
+  }
+  return out;
+}
+
+function getActiveSignature() {
+  const list = Array.isArray(signatureState.list) ? signatureState.list : [];
+  if (!list.length) return null;
+  const active = list.find((x) => x.id === signatureState.activeId) || list[0];
+  return active || null;
+}
+
+function renderSignatureUi() {
+  if (!els.captionSignaturePreset) return;
+  const list = Array.isArray(signatureState.list) ? signatureState.list : [];
+  if (!list.length) {
+    els.captionSignaturePreset.innerHTML = "";
+    els.captionSignatureName.value = "";
+    els.captionSignatureText.value = "";
+    els.captionSignatureName.disabled = true;
+    els.captionSignatureText.disabled = true;
+    if (els.deleteSignature) els.deleteSignature.disabled = true;
+    return;
+  }
+  const active = getActiveSignature() || list[0];
+  signatureState.activeId = active.id;
+  els.captionSignaturePreset.innerHTML = "";
+  for (const it of list) {
+    const opt = document.createElement("option");
+    opt.value = it.id;
+    opt.textContent = `${it.name}${it.text ? "" : " (vacía)"}`;
+    if (it.id === active.id) opt.selected = true;
+    els.captionSignaturePreset.appendChild(opt);
+  }
+  els.captionSignatureName.disabled = false;
+  els.captionSignatureText.disabled = false;
+  els.captionSignatureName.value = active.name || "";
+  els.captionSignatureText.value = active.text || "";
+  if (els.deleteSignature) els.deleteSignature.disabled = list.length <= 1;
+}
+
 function applyProviderUi(provider, cfg = {}) {
   const isLocal = LOCAL_PROVIDERS.has(provider);
 
@@ -406,8 +472,12 @@ function getEffectiveModel(provider) {
     captionTemplateEnabled: false,
     captionTemplate: "{{caption}}",
     captionSignatureText: "",
+    captionSignatures: [],
+    activeCaptionSignatureId: "",
+    contextMenuUseSignature: false,
     autoCaptionSignatureOnAutoFill: false,
     debugEnabled: false,
+    extensionEnabled: true,
     syncApiKey: false,
     apiKey: ""
   });
@@ -434,7 +504,14 @@ function getEffectiveModel(provider) {
     if (els.allowDecorativeAltEmpty) els.allowDecorativeAltEmpty.checked = !!cfg.allowDecorativeAltEmpty;
     if (els.captionTemplateEnabled) els.captionTemplateEnabled.checked = !!cfg.captionTemplateEnabled;
     if (els.captionTemplate) els.captionTemplate.value = String(cfg.captionTemplate || "{{caption}}");
-    if (els.captionSignatureText) els.captionSignatureText.value = String(cfg.captionSignatureText || "");
+    signatureState.list = normalizeSignatures(cfg.captionSignatures, cfg.captionSignatureText);
+    signatureState.activeId = String(cfg.activeCaptionSignatureId || "").trim();
+    if (!signatureState.list.length) {
+      signatureState.list = [{ id: "default", name: "Firma principal", text: "" }];
+      signatureState.activeId = "default";
+    }
+    if (els.contextMenuUseSignature) els.contextMenuUseSignature.checked = !!cfg.contextMenuUseSignature;
+    renderSignatureUi();
     if (els.autoCaptionSignatureOnAutoFill) els.autoCaptionSignatureOnAutoFill.checked = !!cfg.autoCaptionSignatureOnAutoFill;
     if (els.debugEnabled) els.debugEnabled.checked = !!cfg.debugEnabled;
     if (els.syncApiKey) els.syncApiKey.checked = !!cfg.syncApiKey;
@@ -489,6 +566,46 @@ renderMetricsSummary();
 
 els.captionTemplateEnabled?.addEventListener("change", updateCaptionTemplateUi);
 els.autoUploadSafetyFuseEnabled?.addEventListener("change", updateAutoFuseUi);
+
+els.captionSignaturePreset?.addEventListener("change", () => {
+  signatureState.activeId = String(els.captionSignaturePreset.value || "");
+  renderSignatureUi();
+});
+
+els.captionSignatureName?.addEventListener("input", () => {
+  const active = getActiveSignature();
+  if (!active) return;
+  active.name = String(els.captionSignatureName.value || "").trim() || "Firma";
+  renderSignatureUi();
+});
+
+els.captionSignatureText?.addEventListener("input", () => {
+  const active = getActiveSignature();
+  if (!active) return;
+  active.text = String(els.captionSignatureText.value || "").trim();
+});
+
+els.addSignature?.addEventListener("click", () => {
+  signatureState.list = Array.isArray(signatureState.list) ? signatureState.list : [];
+  const idx = signatureState.list.length + 1;
+  const id = makeSignatureId();
+  signatureState.list.push({ id, name: `Firma ${idx}`, text: "" });
+  signatureState.activeId = id;
+  renderSignatureUi();
+  els.captionSignatureName?.focus();
+});
+
+els.deleteSignature?.addEventListener("click", () => {
+  const list = Array.isArray(signatureState.list) ? signatureState.list : [];
+  if (list.length <= 1) {
+    setStatus("Debe existir al menos una firma.");
+    return;
+  }
+  const activeId = String(signatureState.activeId || "");
+  signatureState.list = list.filter((it) => it.id !== activeId);
+  signatureState.activeId = signatureState.list[0]?.id || "";
+  renderSignatureUi();
+});
 
 els.provider.addEventListener("change", () => {
   const p = els.provider.value;
@@ -554,6 +671,11 @@ els.save.addEventListener("click", async () => {
   const provider = els.provider.value;
   const apiKeyVal = (els.apiKey?.value || "").trim();
   const syncApiKey = !!els.syncApiKey?.checked;
+  const normalizedSignatures = normalizeSignatures(signatureState.list);
+  const activeSig =
+    normalizedSignatures.find((x) => x.id === String(signatureState.activeId || "")) ||
+    normalizedSignatures[0] ||
+    { id: "", name: "Firma", text: "" };
 
   const syncPayload = {
     language: els.language.value,
@@ -571,7 +693,10 @@ els.save.addEventListener("click", async () => {
     allowDecorativeAltEmpty: !!els.allowDecorativeAltEmpty?.checked,
     captionTemplateEnabled: !!els.captionTemplateEnabled?.checked,
     captionTemplate: (els.captionTemplate?.value || "{{caption}}").trim() || "{{caption}}",
-    captionSignatureText: (els.captionSignatureText?.value || "").trim(),
+    contextMenuUseSignature: !!els.contextMenuUseSignature?.checked,
+    captionSignatures: normalizedSignatures,
+    activeCaptionSignatureId: activeSig.id || "",
+    captionSignatureText: String(activeSig.text || "").trim(),
     autoCaptionSignatureOnAutoFill: !!els.autoCaptionSignatureOnAutoFill?.checked,
     debugEnabled: !!els.debugEnabled?.checked,
     syncApiKey,

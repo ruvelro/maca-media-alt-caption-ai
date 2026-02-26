@@ -45,6 +45,9 @@ const DEFAULT_SYNC_CFG = {
   captionTemplateEnabled: false,
   captionTemplate: "{{caption}}",
   captionSignatureText: "",
+  captionSignatures: [],
+  activeCaptionSignatureId: "",
+  contextMenuUseSignature: false,
   autoCaptionSignatureOnAutoFill: false,
   autoQueueModeVisible: true,
   autoUploadSafetyFuseEnabled: true,
@@ -61,6 +64,7 @@ const DEFAULT_SYNC_CFG = {
   // If true, store and read apiKey from chrome.storage.sync (Google account)
   // instead of chrome.storage.local (this device).
   syncApiKey: false,
+  extensionEnabled: true,
   provider: "openai",
   model: "gpt-5-mini",
   prompt: "",
@@ -179,6 +183,32 @@ function renderSimpleTemplate(tpl, vars) {
 
 function safeHost(pageUrl) {
   try { return new URL(pageUrl || "").hostname || ""; } catch (_) { return ""; }
+}
+
+function normalizeSignatureList(rawList, legacyText = "") {
+  const list = Array.isArray(rawList) ? rawList : [];
+  const out = [];
+  for (const it of list) {
+    if (!it || typeof it !== "object") continue;
+    const id = String(it.id || "").trim() || crypto.randomUUID();
+    const name = String(it.name || "").trim() || "Firma";
+    const text = String(it.text || "").trim();
+    if (!text) continue;
+    out.push({ id, name, text });
+  }
+  if (!out.length) {
+    const legacy = String(legacyText || "").trim();
+    if (legacy) out.push({ id: "default", name: "Firma principal", text: legacy });
+  }
+  return out;
+}
+
+function getActiveSignatureText(cfg) {
+  const list = normalizeSignatureList(cfg?.captionSignatures, cfg?.captionSignatureText);
+  if (!list.length) return "";
+  const activeId = String(cfg?.activeCaptionSignatureId || "").trim();
+  const active = list.find((x) => x.id === activeId) || list[0];
+  return String(active?.text || "").trim();
 }
 
 function extractFilenameFromImageUrl(imageUrl) {
@@ -327,23 +357,40 @@ function isOpenRouterGlm(provider, model) {
 
 function getOpenRouterGlmQualityPrompt(mode) {
   const m = String(mode || "both");
-  const outLines =
+  const schema =
     m === "alt"
-      ? ["ALT: <texto final>", "TITLE: <texto final breve>"]
+      ? '{"alt":"...","title":"...","decorativa":false}'
       : (m === "caption"
-        ? ["LEYENDA: <frase final breve>"]
-        : ["ALT: <texto final>", "TITLE: <texto final breve (3-6 palabras)>", "LEYENDA: <frase final breve>"]);
+        ? '{"leyenda":"..."}'
+        : '{"alt":"...","title":"...","leyenda":"...","decorativa":false}');
   return [
     "MODO CALIDAD (OpenRouter/GLM):",
-    "- Describe SOLO lo visible en la imagen, sin inventar.",
-    "- Evita frases genéricas como: \"pantalla encendida\", \"contenido multimedia\", \"imagen de\", \"foto de\".",
-    "- ALT: 90-125 caracteres, descriptivo y concreto.",
-    "- TITLE: 3-6 palabras, claro y natural.",
-    "- LEYENDA: 1 frase editorial breve, con contexto visual.",
-    "- No devuelvas razonamiento, pasos, ni explicaciones.",
-    "- Devuelve SOLO la salida final en el formato solicitado.",
-    ...outLines
+    "- Usa español de España (es-ES). Evita latinismos y regionalismos de Latinoamérica.",
+    "- Describe SOLO lo visible, sin inventar datos técnicos o marcas no legibles.",
+    "- ALT: concreto, natural y útil para accesibilidad.",
+    "- TITLE: 2-8 palabras, nunca repitas el ALT completo.",
+    "- LEYENDA: 1 frase editorial breve; evita relleno.",
+    "- Prohibido devolver razonamiento, explicaciones o texto fuera del JSON.",
+    "- Salida obligatoria: JSON válido y nada más.",
+    schema
   ].join("\n");
+}
+
+function getSpanishLocaleGuard(lang) {
+  const s = String(lang || "").toLowerCase();
+  if (!s.startsWith("es")) return "";
+  return "\nIdioma obligatorio: español de España (es-ES). Usa terminología de España y evita variantes regionales latinoamericanas.\n";
+}
+
+function normalizeTitleText(title, { minWords = 2, maxWords = 8 } = {}) {
+  let s = normalizeCaptionText(title || "");
+  if (!s) return "";
+  const words = s.split(/\s+/).filter(Boolean);
+  if (!words.length) return "";
+  if (words.length > Math.max(1, maxWords)) {
+    s = words.slice(0, Math.max(1, maxWords)).join(" ");
+  }
+  return s.trim();
 }
 
 function ensureTrailingPeriod(text) {
@@ -440,16 +487,13 @@ async function copySequenceToClipboard(texts, delayMs = 260) {
 
 // =========================
 // Context menu (WordPress-only)
-// - Two entries:
-//   1) Analyze normally.
-//   2) Analyze and apply caption signature.
+// - Single entry. Signature behavior is controlled via settings.
 //
 // IMPORTANT: We avoid removeAll/recreate cycles because they can race on MV3 wake-ups
 // and cause "Cannot create item with duplicate id" in Chromium.
 // =========================
 
 const MENU_ID_NORMAL = "maca-analyze";
-const MENU_ID_SIGNED = "maca-analyze-signed";
 
 function isWpAdminUrl(u) {
   const s = String(u || "");
@@ -469,22 +513,14 @@ function ensureMenu() {
   __menuEnsured = true;
   if (!chrome?.contextMenus?.create) return;
   try {
+    // Cleanup legacy menu id from previous versions.
+    chrome.contextMenus.remove("maca-analyze-signed", () => {
+      void chrome.runtime.lastError;
+    });
     chrome.contextMenus.create(
       {
         id: MENU_ID_NORMAL,
         title: "Analizar imagen con maca",
-        contexts: ["all"],
-        documentUrlPatterns: ["*://*/*wp-admin/*"]
-      },
-      () => {
-        // Always read lastError to prevent "Unchecked runtime.lastError" noise.
-        void chrome.runtime.lastError;
-      }
-    );
-    chrome.contextMenus.create(
-      {
-        id: MENU_ID_SIGNED,
-        title: "Analizar y rellenar con firma",
         contexts: ["all"],
         documentUrlPatterns: ["*://*/*wp-admin/*"]
       },
@@ -510,6 +546,7 @@ if (chrome?.commands?.onCommand?.addListener) {
     (async () => {
       const cfg = await getConfigCached();
       if (!cfg?.shortcutEnabled) return;
+      if (cfg?.extensionEnabled === false) return;
 
       // Some Chromium variants don't pass `tab` to onCommand.
       let activeTab = tab;
@@ -598,7 +635,7 @@ if (chrome?.commands?.onCommand?.addListener) {
           imageUrl: imgUrl,
           filenameContext,
           pageUrl,
-          withCaptionSignature: !!cfg.wpAutoApply && !!cfg.autoCaptionSignatureOnAutoFill,
+          withCaptionSignature: !!cfg.contextMenuUseSignature,
           source: "shortcut"
         });
 
@@ -916,20 +953,21 @@ if (chrome?.runtime?.onMessage?.addListener) {
 // Keep menu visibility in sync right before showing.
 if (chrome?.contextMenus?.onShown?.addListener) {
   chrome.contextMenus.onShown.addListener((info, tab) => {
-    try {
-      ensureMenu();
-      const pageUrl = info?.pageUrl || tab?.url || "";
-      const inWp = isWpAdminUrl(pageUrl);
-      chrome.contextMenus.update(MENU_ID_NORMAL, { visible: inWp }, () => {
-        void chrome.runtime.lastError;
-      });
-      chrome.contextMenus.update(MENU_ID_SIGNED, { visible: inWp }, () => {
-        void chrome.runtime.lastError;
+    (async () => {
+      try {
+        ensureMenu();
+        const pageUrl = info?.pageUrl || tab?.url || "";
+        const inWp = isWpAdminUrl(pageUrl);
+        const cfg = await getConfigCached().catch(() => DEFAULT_SYNC_CFG);
+        const visible = inWp && cfg?.extensionEnabled !== false;
+        chrome.contextMenus.update(MENU_ID_NORMAL, { visible }, () => {
+          void chrome.runtime.lastError;
+        });
         chrome.contextMenus.refresh?.();
-      });
-    } catch (_) {
-      // ignore
-    }
+      } catch (_) {
+        // ignore
+      }
+    })();
   });
 }
 
@@ -1002,9 +1040,8 @@ if (chrome?.contextMenus?.onClicked?.addListener) chrome.contextMenus.onClicked.
     const jobId = crypto.randomUUID();
 
 
-    if (info.menuItemId === MENU_ID_NORMAL || info.menuItemId === MENU_ID_SIGNED) {
+    if (info.menuItemId === MENU_ID_NORMAL) {
       const inWp = isWpAdminUrl(t.url || info?.pageUrl || "");
-      const useCaptionSignature = info.menuItemId === MENU_ID_SIGNED;
 
       if (!inWp) {
         await ensureOverlayInjected(tabId);
@@ -1051,6 +1088,15 @@ if (chrome?.contextMenus?.onClicked?.addListener) chrome.contextMenus.onClicked.
 
       // Show overlay immediately (loading state)
       const cfg = await getConfigCached();
+      if (cfg?.extensionEnabled === false) {
+        await ensureOverlayInjected(tabId);
+        await sendOverlay(tabId, {
+          type: "MACA_OVERLAY_ERROR",
+          jobId,
+          error: "maca está desactivada en ajustes rápidos."
+        });
+        return;
+      }
       await ensureOverlayInjected(tabId);
       await sendOverlay(tabId, {
         type: "MACA_OVERLAY_OPEN",
@@ -1070,7 +1116,7 @@ if (chrome?.contextMenus?.onClicked?.addListener) chrome.contextMenus.onClicked.
           imageUrl: imgUrl,
           filenameContext,
           pageUrl,
-          withCaptionSignature: useCaptionSignature || (!!cfg.wpAutoApply && !!cfg.autoCaptionSignatureOnAutoFill),
+          withCaptionSignature: !!cfg.contextMenuUseSignature,
           source: "contextmenu"
         });
 
@@ -1114,11 +1160,21 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
 
   const startedAt = Date.now();
   const cfg = await getConfigCached();
+  if (cfg?.extensionEnabled === false) {
+    throw new Error("maca está desactivada en ajustes rápidos.");
+  }
   const selectedModel = (cfg.provider === "local_ollama" || cfg.provider === "local_openai")
     ? (cfg.localModel || cfg.model || "")
     : cfg.model;
   const mode = String(modeOverride || cfg.generateMode || "both"); // both | alt | caption
-  await addDebugLog(cfg, "analyze_start", { provider: cfg.provider, model: cfg.model, mode: String(modeOverride || cfg.generateMode || "both"), pageHost: safeHost(pageUrl), imageUrl });
+  await addDebugLog(cfg, "analyze_start", {
+    provider: cfg.provider,
+    model: cfg.model,
+    mode: String(modeOverride || cfg.generateMode || "both"),
+    pageHost: safeHost(pageUrl),
+    imageUrl,
+    filenameContext: String(filenameContext || "")
+  });
 
   const isLocal = cfg.provider === "local_ollama" || cfg.provider === "local_openai";
   if (!isLocal && !cfg.apiKey) {
@@ -1135,7 +1191,7 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
   const allowDecorativeAltEmpty = (cfg.allowDecorativeAltEmpty !== undefined) ? !!cfg.allowDecorativeAltEmpty : false;
   const captionTemplateEnabled = (cfg.captionTemplateEnabled !== undefined) ? !!cfg.captionTemplateEnabled : false;
   const captionTemplate = String(cfg.captionTemplate || "{{caption}}");
-  const captionSignatureText = String(cfg.captionSignatureText || "").trim();
+  const captionSignatureText = getActiveSignatureText(cfg);
 
   const usingCustomPrompt = !!(cfg.prompt && cfg.prompt.trim());
   let basePrompt = usingCustomPrompt ? cfg.prompt : getPromptForProfile(cfg.seoProfile);
@@ -1155,6 +1211,7 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
 
   const finalPrompt =
     contextBlock +
+    getSpanishLocaleGuard(getEffectiveLang(cfg)) +
     renderPrompt(basePrompt, {
       LANG: getEffectiveLang(cfg),
       PAGE_URL: pageUrl || "",
@@ -1230,7 +1287,7 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
       "X-Title": "maca for Chrome"
     };
 
-    const makeBody = (withDocsParams = true, withSchema = true) => {
+    const makeBody = ({ withDocsParams = true, withSchema = true } = {}) => {
       const body = {
         model,
         messages: [
@@ -1242,7 +1299,8 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
             ]
           }
         ],
-        max_tokens: 500
+        max_tokens: 420,
+        temperature: 0.2
       };
       if (useGlmModel && withDocsParams) {
         body.provider = { allow_fallbacks: false, require_parameters: true };
@@ -1305,20 +1363,24 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
       return body;
     };
 
-    let res = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", requestOptions({
-      method: "POST",
-      headers,
-      body: JSON.stringify(makeBody(true, true))
-    }));
-    let json = await safeJson(res);
-    if (!res.ok && shouldFallbackOpenRouterCompatibility(res.status, json)) {
-      // Fallback compatibility: remove strict docs params/schema if provider rejects them.
+    const attempts = [
+      { withDocsParams: true, withSchema: true },
+      { withDocsParams: true, withSchema: false },
+      { withDocsParams: false, withSchema: false }
+    ];
+    let res = null;
+    let json = null;
+    for (let i = 0; i < attempts.length; i++) {
+      const attempt = attempts[i];
       res = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", requestOptions({
         method: "POST",
         headers,
-        body: JSON.stringify(makeBody(false, false))
+        body: JSON.stringify(makeBody(attempt))
       }));
       json = await safeJson(res);
+      if (res.ok) break;
+      const canFallback = shouldFallbackOpenRouterCompatibility(res.status, json);
+      if (!canFallback || i >= attempts.length - 1) break;
     }
     if (!res.ok) {
       throw new Error(json?.error?.message || json?.error || json?.message || "Error OpenRouter");
@@ -1502,6 +1564,10 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
     throw new Error("Proveedor de IA no soportado");
   }
 
+  if (!String(rawOutput || "").trim()) {
+    throw new Error("La IA devolvió una respuesta vacía.");
+  }
+
   const parsed = normalizeModelJson(rawOutput);
   if (!parsed) {
     throw new Error("La IA no devolvió JSON válido.");
@@ -1528,7 +1594,7 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
   }
 
   let altFinal = altProvided ? normalizeAltText(parsed.alt, altMaxLength, avoidImagePrefix) : "";
-  const titleFinal = normalizeCaptionText(
+  let titleFinal = normalizeTitleText(
     titleProvided
       ? parsed.title
       : (altFinal || "")
@@ -1559,6 +1625,11 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
         // eslint-disable-next-line no-param-reassign
         altFinal = ensureAltTrailingPeriodWithinLimit(noPrefixAlt, altMaxLength);
       }
+    }
+    if (!titleFinal && altFinal) {
+      titleFinal = normalizeTitleText(altFinal, { minWords: 2, maxWords: 6 });
+    } else {
+      titleFinal = normalizeTitleText(titleFinal, { minWords: 2, maxWords: 8 });
     }
     if (leyendaFinal) leyendaFinal = ensureTrailingPeriod(leyendaFinal);
   }
@@ -1819,7 +1890,7 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
           imageUrl,
           filenameContext,
           pageUrl,
-          withCaptionSignature: !!cfg.wpAutoApply && !!cfg.autoCaptionSignatureOnAutoFill,
+          withCaptionSignature: !!cfg.contextMenuUseSignature,
           source: "overlay_manual"
         });
 
@@ -1853,7 +1924,7 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
           imageUrl,
           filenameContext,
           pageUrl,
-          withCaptionSignature: !!cfg.wpAutoApply && !!cfg.autoCaptionSignatureOnAutoFill,
+          withCaptionSignature: !!cfg.contextMenuUseSignature,
           source: "overlay_regenerate"
         });
         sendResponse({ alt, title, leyenda, decorativa });
@@ -1896,6 +1967,7 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
       const attachmentId = String(msg?.attachmentId || "");
       const imageUrl = String(msg?.imageUrl || "");
       const filenameContext = String(msg?.filenameContext || "");
+      const trigger = String(msg?.trigger || "upload");
       let markedSeen = false;
       try {
         if (tabId == null) throw new Error("No hay pestaña activa.");
@@ -1906,8 +1978,16 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
         }
 
         const cfg = await getConfigCached();
+        if (cfg?.extensionEnabled === false) {
+          sendResponse({ ok: false, skipped: true, reason: "extension_disabled" });
+          return;
+        }
         if (!cfg?.wpAutoAnalyzeOnUpload) {
           sendResponse({ ok: false, skipped: true, reason: "disabled" });
+          return;
+        }
+        if (trigger !== "upload" && !cfg?.autoAnalyzeOnSelectMedia) {
+          sendResponse({ ok: false, skipped: true, reason: "non_upload_trigger" });
           return;
         }
         const st = getAutoUploadStats(tabId);
@@ -2188,6 +2268,9 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
         const batchAbort = new AbortController();
         __batchAbortByTab.set(tabId, batchAbort);
         const cfg = await getConfigCached();
+        if (cfg?.extensionEnabled === false) {
+          throw new Error("maca está desactivada en ajustes rápidos.");
+        }
 
         await addDebugLog(cfg, "batch_start", { tabId });
 
@@ -2233,7 +2316,7 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
               imageUrl,
               filenameContext,
               pageUrl: sender.tab?.url || "",
-              withCaptionSignature: !!cfg.autoCaptionSignatureOnAutoFill,
+              withCaptionSignature: !!cfg.autoCaptionSignatureOnAutoFill || !!cfg.contextMenuUseSignature,
               abortSignal: batchAbort.signal,
               source: "batch"
             });

@@ -282,9 +282,36 @@
       <textarea id="captionTemplate" rows="3" placeholder="{{caption}}"></textarea>
     </div>
     <div class="field" style="margin-top:10px;">
-      <label for="captionSignatureText">Texto de firma para leyenda (opción con firma)</label>
+      <label style="display:flex; gap:10px; align-items:center;">
+        <input type="checkbox" id="contextMenuUseSignature" style="width:auto; margin:0;" />
+        Añadir firma en análisis manual (menú contextual y regenerar)
+      </label>
+      <div class="help">
+        Se usa cuando ejecutas análisis manual desde WordPress. La auto-subida mantiene su opción independiente.
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <div class="field">
+        <label for="captionSignaturePreset">Firma activa</label>
+        <select id="captionSignaturePreset"></select>
+        <div class="row" style="margin-top:8px;">
+          <div class="field" style="margin:0;">
+            <button id="addSignature" type="button" class="secondary">Nueva firma</button>
+          </div>
+          <div class="field" style="margin:0;">
+            <button id="deleteSignature" type="button" class="secondary">Eliminar firma</button>
+          </div>
+        </div>
+      </div>
+      <div class="field">
+        <label for="captionSignatureName">Nombre de la firma</label>
+        <input id="captionSignatureName" type="text" placeholder="Ej: HardZone estándar" />
+      </div>
+    </div>
+    <div class="field" style="margin-top:10px;">
+      <label for="captionSignatureText">Texto de firma de la opción activa</label>
       <input id="captionSignatureText" type="text" placeholder="Ej: Foto: @tuusuario" />
-      <div class="help">Se añade al final de la leyenda solo cuando usas la opción "Analizar y rellenar con firma" del menú contextual.</div>
+      <div class="help">Se añade al final de la leyenda cuando está activada la firma para análisis manual o para auto-relleno.</div>
     </div>
     <div class="field" style="margin-top:10px;">
       <label style="display:flex; gap:10px; align-items:center;">
