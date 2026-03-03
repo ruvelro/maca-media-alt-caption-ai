@@ -7,6 +7,7 @@
   const STYLE_ID = "maca-overlay-styles";
   const FEEDBACK_MS = 900;
   const MIN_LOADING_MS = 350; // ensures at least a visible loading phase (especially in WordPress)
+  const MAX_LOADING_MS = 95000; // avoid infinite loading states
 
   // Remove previous listener if any (avoid mixed versions in same tab)
   try {
@@ -28,13 +29,19 @@
     mini: null,
     imgEl: null,
     statusBox: null,
+    seoBox: null,
     altArea: null,
     titleArea: null,
     capArea: null,
+    sessionContextInput: null,
     batchBtn: null,
     batchCancelBtn: null,
     autoUploadPauseBtn: null,
-    autoUploadCancelBtn: null
+    autoUploadCancelBtn: null,
+    addSignatureBtn: null,
+    styleTechBtn: null,
+    styleShortBtn: null,
+    styleEditorialBtn: null
   };
 
   const STATE = {
@@ -45,6 +52,8 @@
     alt: "",
     title: "",
     leyenda: "",
+    seoReview: null,
+    sessionContext: "",
     wpAutoApply: false,
     wpAutoApplyRequireMedia: true,
     onCompleteAction: "none", // none | minimize | close
@@ -60,7 +69,9 @@
     batchCancelling: false,
     autoUploadRunning: false,
     autoUploadCancelling: false,
-    autoUploadPaused: false
+    autoUploadPaused: false,
+    sessionContextTimer: null,
+    loadingWatchdogTimer: null
   };
 
   function injectStyles() {
@@ -224,6 +235,31 @@
       }
       #maca-panel .status.ready .status-icon { display: flex; }
       #maca-panel .status.ready .status-icon::before { content: "✓"; }
+      #maca-panel .seo-pill {
+        margin-left: auto;
+        font-size: 11px;
+        font-weight: 800;
+        border-radius: 999px;
+        padding: 3px 8px;
+        border: 1px solid #d1d5db;
+        background: #f9fafb;
+        color: #111827;
+      }
+      #maca-panel .seo-pill.ok {
+        background: #ecfdf5;
+        border-color: #10b981;
+        color: #065f46;
+      }
+      #maca-panel .seo-pill.warning {
+        background: #fff7ed;
+        border-color: #f59e0b;
+        color: #92400e;
+      }
+      #maca-panel .seo-pill.error {
+        background: #fef2f2;
+        border-color: #ef4444;
+        color: #991b1b;
+      }
 
       #maca-panel label {
         display: block;
@@ -250,6 +286,26 @@
       }
       #maca-panel textarea.ready { opacity: 1; }
       #maca-panel textarea[disabled] { background: #f9fafb; color: #6b7280; }
+      #maca-panel input[type="text"].maca-context {
+        width: 100%;
+        padding: 9px 10px;
+        border-radius: 10px;
+        border: 1px solid #e5e7eb;
+        font-size: 12px;
+        margin-top: 8px;
+      }
+      #maca-panel .subhelp {
+        font-size: 11px;
+        color: #6b7280;
+        margin-top: 4px;
+      }
+      #maca-panel .style-actions {
+        margin-top: 8px;
+      }
+      #maca-panel .style-actions button {
+        font-size: 12px;
+        padding: 8px 10px;
+      }
 
       #maca-panel .actions {
         display: flex;
@@ -345,9 +401,11 @@
     UI.panel = null;
     UI.imgEl = null;
     UI.statusBox = null;
+    UI.seoBox = null;
     UI.altArea = null;
     UI.titleArea = null;
     UI.capArea = null;
+    UI.sessionContextInput = null;
     STATE.firstPaintDone = false;
   }
 
@@ -369,6 +427,31 @@
       STATE.autoApplyTimer = null;
     }
     STATE.autoApplyAttempts = 0;
+  }
+
+  function clearSessionContextTimer() {
+    if (STATE.sessionContextTimer) {
+      clearTimeout(STATE.sessionContextTimer);
+      STATE.sessionContextTimer = null;
+    }
+  }
+
+  function clearLoadingWatchdog() {
+    if (STATE.loadingWatchdogTimer) {
+      clearTimeout(STATE.loadingWatchdogTimer);
+      STATE.loadingWatchdogTimer = null;
+    }
+  }
+
+  function armLoadingWatchdog() {
+    clearLoadingWatchdog();
+    STATE.loadingWatchdogTimer = setTimeout(() => {
+      if (STATE.status !== "loading") return;
+      handleError({
+        jobId: STATE.jobId,
+        error: "Tiempo de espera agotado durante la generación. Reintenta o cambia de proveedor/modelo."
+      });
+    }, MAX_LOADING_MS);
   }
 
   function scheduleAutoApply() {
@@ -417,12 +500,15 @@
   function closeAll() {
     clearApplyTimer();
     clearAutoApplyTimer();
+    clearLoadingWatchdog();
     STATE.jobId = null;
     STATE.imgUrl = "";
     STATE.pageUrl = "";
     STATE.alt = "";
     STATE.title = "";
     STATE.leyenda = "";
+    STATE.seoReview = null;
+    STATE.sessionContext = "";
     STATE.status = "idle";
     STATE.error = "";
     STATE.loadingSince = 0;
@@ -432,6 +518,7 @@
     STATE.autoUploadRunning = false;
     STATE.autoUploadCancelling = false;
     STATE.autoUploadPaused = false;
+    clearSessionContextTimer();
     removeOverlay();
     removeMini();
   }
@@ -697,6 +784,37 @@ async function copyText(text, btn, label) {
     return { alt, title, leyenda };
   }
 
+  function normalizeInlineText(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function appendSignatureToCaption(caption, signature) {
+    const base = normalizeInlineText(caption);
+    const sign = normalizeInlineText(signature);
+    if (!sign) return { caption: base, added: false, reason: "empty_signature" };
+
+    const baseCmp = base.toLocaleLowerCase("es-ES").replace(/[.!?…]+$/g, "").trim();
+    const signCmp = sign.toLocaleLowerCase("es-ES").replace(/[.!?…]+$/g, "").trim();
+    if (baseCmp && signCmp && baseCmp.endsWith(signCmp)) {
+      return { caption: base, added: false, reason: "already_present" };
+    }
+
+    const joiner = base ? (/[.!?…]$/.test(base) ? " " : ". ") : "";
+    return { caption: `${base}${joiner}${sign}`.trim(), added: true };
+  }
+
+  async function getActiveSignatureFromConfig() {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: "MACA_GET_ACTIVE_SIGNATURE" });
+      return {
+        text: String(res?.text || "").trim(),
+        name: String(res?.name || "").trim()
+      };
+    } catch (_) {
+      return { text: "", name: "" };
+    }
+  }
+
 
 function isWpAdminPage() {
   try {
@@ -804,6 +922,61 @@ Leyenda: ${c}`);
     setButtonFeedback(btn, { ok, label });
   }
 
+  function getSeoSummaryText(review) {
+    if (!review || typeof review !== "object") return "";
+    const badge = String(review.badge || "").trim() || "N/A";
+    const score = Number.isFinite(Number(review.score)) ? Number(review.score) : null;
+    if (score == null) return `SEO: ${badge}`;
+    return `SEO: ${badge} (${score}/100)`;
+  }
+
+  function persistSessionContextDebounced(nextText) {
+    STATE.sessionContext = String(nextText || "").trim();
+    clearSessionContextTimer();
+    STATE.sessionContextTimer = setTimeout(async () => {
+      try {
+        await chrome.runtime.sendMessage({
+          type: "MACA_SET_SESSION_CONTEXT",
+          context: STATE.sessionContext
+        });
+      } catch (_) {}
+    }, 280);
+  }
+
+  async function triggerRegenerate(styleOverride = "") {
+    if (STATE.status === "loading") return;
+    try {
+      const ctx = String(UI.sessionContextInput?.value || STATE.sessionContext || "");
+      STATE.sessionContext = ctx.trim();
+      await chrome.runtime.sendMessage({ type: "MACA_SET_SESSION_CONTEXT", context: STATE.sessionContext });
+    } catch (_) {}
+    STATE.status = "loading";
+    STATE.error = "";
+    STATE.pendingResult = null;
+    STATE.loadingSince = Date.now();
+    STATE.firstPaintDone = false;
+    armLoadingWatchdog();
+    updateUI();
+    try {
+      const res = await chrome.runtime.sendMessage({
+        type: "MACA_REGENERATE",
+        imageUrl: STATE.imgUrl,
+        pageUrl: STATE.pageUrl,
+        styleOverride: String(styleOverride || "")
+      });
+      if (res?.error) throw new Error(res.error);
+      handleResult({
+        jobId: STATE.jobId,
+        alt: res?.alt || "",
+        title: res?.title || "",
+        leyenda: res?.leyenda || "",
+        seoReview: res?.seoReview || null
+      });
+    } catch (err) {
+      handleError({ jobId: STATE.jobId, error: err?.message || String(err) });
+    }
+  }
+
   function showMini() {
     if (UI.mini) return;
     injectStyles();
@@ -857,6 +1030,9 @@ Leyenda: ${c}`);
             </div>
             <div class="actions preview-actions">
               <button id="maca-regenerate" class="secondary">Regenerar</button>
+              <button id="maca-style-tech" class="secondary">Más técnico</button>
+              <button id="maca-style-short" class="secondary">Más corto</button>
+              <button id="maca-style-editorial" class="secondary">Más editorial</button>
               <button id="maca-batch" class="secondary">Procesar selección</button>
               <button id="maca-batch-cancel" class="secondary" style="display:none;">Cancelar lote</button>
               <button id="maca-auto-pause" class="secondary" style="display:none;">Pausar auto-subida</button>
@@ -867,7 +1043,11 @@ Leyenda: ${c}`);
             <div class="status" id="maca-status">
               <span class="status-icon" aria-hidden="true"></span>
               <span class="status-text"></span>
+              <span id="maca-seo-pill" class="seo-pill" hidden>SEO: N/A</span>
             </div>
+            <label for="maca-session-context">Contexto de sesión (opcional)</label>
+            <input id="maca-session-context" class="maca-context" type="text" placeholder="Ej: comparativa de SSD PCIe 5.0 para gaming" />
+            <div class="subhelp">Se aplica a esta pestaña para análisis manual, lote y auto-subida.</div>
             <label for="maca-alt" id="maca-alt-label">ALT</label>
             <textarea id="maca-alt" placeholder="Generando..." disabled></textarea>
             <label for="maca-title" id="maca-title-label">Title</label>
@@ -878,6 +1058,7 @@ Leyenda: ${c}`);
               <button id="maca-copy-alt">Copiar ALT</button>
               <button id="maca-copy-title">Copiar title</button>
               <button id="maca-copy-cap">Copiar leyenda</button>
+              <button id="maca-add-signature">Añadir firma</button>
               <button id="maca-copy-both" class="primary">Copiar todo</button>
             </div>
           </div>
@@ -890,13 +1071,19 @@ Leyenda: ${c}`);
     UI.panel = overlay.querySelector("#maca-panel");
     UI.imgEl = overlay.querySelector("#maca-img");
     UI.statusBox = overlay.querySelector("#maca-status");
+    UI.seoBox = overlay.querySelector("#maca-seo-pill");
     UI.altArea = overlay.querySelector("#maca-alt");
     UI.titleArea = overlay.querySelector("#maca-title");
     UI.capArea = overlay.querySelector("#maca-cap");
+    UI.sessionContextInput = overlay.querySelector("#maca-session-context");
     UI.batchBtn = overlay.querySelector("#maca-batch");
     UI.batchCancelBtn = overlay.querySelector("#maca-batch-cancel");
     UI.autoUploadPauseBtn = overlay.querySelector("#maca-auto-pause");
     UI.autoUploadCancelBtn = overlay.querySelector("#maca-auto-cancel");
+    UI.addSignatureBtn = overlay.querySelector("#maca-add-signature");
+    UI.styleTechBtn = overlay.querySelector("#maca-style-tech");
+    UI.styleShortBtn = overlay.querySelector("#maca-style-short");
+    UI.styleEditorialBtn = overlay.querySelector("#maca-style-editorial");
     UI.altArea?.addEventListener("input", () => {
       if (STATE.status === "ready") STATE.alt = String(UI.altArea?.value || "");
     });
@@ -905,6 +1092,9 @@ Leyenda: ${c}`);
     });
     UI.titleArea?.addEventListener("input", () => {
       if (STATE.status === "ready") STATE.title = String(UI.titleArea?.value || "");
+    });
+    UI.sessionContextInput?.addEventListener("input", () => {
+      persistSessionContextDebounced(UI.sessionContextInput?.value || "");
     });
 
     // Ensure correct initial visibility/state for batch button
@@ -923,6 +1113,11 @@ Leyenda: ${c}`);
       if (STATE.batchRunning) return;
       updateBatchButtonUi();
       if (UI.batchBtn?.disabled) return;
+      try {
+        const ctx = String(UI.sessionContextInput?.value || STATE.sessionContext || "").trim();
+        STATE.sessionContext = ctx;
+        await chrome.runtime.sendMessage({ type: "MACA_SET_SESSION_CONTEXT", context: ctx });
+      } catch (_) {}
 
       STATE.status = "loading";
       STATE.batchRunning = true;
@@ -996,26 +1191,18 @@ Leyenda: ${c}`);
     });
     overlay.querySelector("#maca-close").addEventListener("click", () => closeAll());
 
-	    overlay.querySelector("#maca-regenerate").addEventListener("click", async (e) => {
-	      if (STATE.status === "loading") return;
-	      STATE.status = "loading";
-	      STATE.error = "";
-	      STATE.pendingResult = null;
-	      STATE.loadingSince = Date.now();
-	      STATE.firstPaintDone = false;
-	      updateUI();
-	      try {
-	        const res = await chrome.runtime.sendMessage({
-	          type: "MACA_REGENERATE",
-	          imageUrl: STATE.imgUrl,
-	          pageUrl: STATE.pageUrl
-	        });
-	        if (res?.error) throw new Error(res.error);
-	        handleResult({ jobId: STATE.jobId, alt: res?.alt || "", title: res?.title || "", leyenda: res?.leyenda || "" });
-	      } catch (err) {
-	        handleError({ jobId: STATE.jobId, error: err?.message || String(err) });
-	      }
+	    overlay.querySelector("#maca-regenerate").addEventListener("click", async () => {
+	      await triggerRegenerate("");
 	    });
+    UI.styleTechBtn?.addEventListener("click", async () => {
+      await triggerRegenerate("technical");
+    });
+    UI.styleShortBtn?.addEventListener("click", async () => {
+      await triggerRegenerate("short");
+    });
+    UI.styleEditorialBtn?.addEventListener("click", async () => {
+      await triggerRegenerate("editorial");
+    });
 
     overlay.querySelector("#maca-copy-alt").addEventListener("click", (e) => {
       const { alt, title } = getCurrentOverlayTexts();
@@ -1036,6 +1223,36 @@ Leyenda: ${c}`);
       STATE.leyenda = leyenda;
       copyText(leyenda, e.currentTarget, "Copiar leyenda");
       applyToWordPressFields({ leyenda });
+    });
+    UI.addSignatureBtn?.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      const { leyenda } = getCurrentOverlayTexts();
+      const { text: signatureText, name: signatureName } = await getActiveSignatureFromConfig();
+      if (!signatureText) {
+        if (UI.statusBox) {
+          const txt = UI.statusBox.querySelector(".status-text");
+          if (txt) txt.textContent = "No hay firma activa configurada.";
+        }
+        setButtonFeedback(btn, { ok: false, label: "Añadir firma" });
+        return;
+      }
+      const out = appendSignatureToCaption(leyenda, signatureText);
+      if (!out.added) {
+        if (UI.statusBox) {
+          const txt = UI.statusBox.querySelector(".status-text");
+          if (txt) txt.textContent = out.reason === "already_present" ? "La firma ya estaba añadida." : "No se pudo añadir la firma.";
+        }
+        setButtonFeedback(btn, { ok: false, label: "Añadir firma" });
+        return;
+      }
+      STATE.leyenda = out.caption;
+      if (UI.capArea) UI.capArea.value = out.caption;
+      applyToWordPressFields({ leyenda: out.caption });
+      if (UI.statusBox) {
+        const txt = UI.statusBox.querySelector(".status-text");
+        if (txt) txt.textContent = signatureName ? `Firma añadida: ${signatureName}.` : "Firma añadida en la leyenda.";
+      }
+      setButtonFeedback(btn, { ok: true, label: "Añadir firma" });
     });
     overlay.querySelector("#maca-copy-both").addEventListener("click", (e) => {
       const { alt, title, leyenda } = getCurrentOverlayTexts();
@@ -1085,6 +1302,18 @@ Leyenda: ${c}`);
         else if (isError) textEl.textContent = `Error: ${STATE.error || "desconocido"}`;
         else textEl.textContent = "";
       }
+      if (UI.seoBox) {
+        const review = STATE.seoReview;
+        if (isReady && review) {
+          UI.seoBox.hidden = false;
+          UI.seoBox.textContent = getSeoSummaryText(review);
+          UI.seoBox.className = `seo-pill ${String(review.level || "").toLowerCase()}`;
+        } else {
+          UI.seoBox.hidden = true;
+          UI.seoBox.className = "seo-pill";
+          UI.seoBox.textContent = "SEO: N/A";
+        }
+      }
 
 	      // Toggle fields based on mode
 	      const altLabel = UI.overlay.querySelector("#maca-alt-label");
@@ -1118,12 +1347,19 @@ Leyenda: ${c}`);
 	      const btnAlt = UI.overlay.querySelector("#maca-copy-alt");
 	      const btnTitle = UI.overlay.querySelector("#maca-copy-title");
 	      const btnCap = UI.overlay.querySelector("#maca-copy-cap");
+      const btnAddSignature = UI.addSignatureBtn;
       const btnBoth = UI.overlay.querySelector("#maca-copy-both");
       const btnRegen = UI.overlay.querySelector("#maca-regenerate");
+      const btnStyleTech = UI.styleTechBtn;
+      const btnStyleShort = UI.styleShortBtn;
+      const btnStyleEditorial = UI.styleEditorialBtn;
       const btnBatchCancel = UI.overlay.querySelector("#maca-batch-cancel");
       const btnAutoPause = UI.overlay.querySelector("#maca-auto-pause");
       const btnAutoCancel = UI.overlay.querySelector("#maca-auto-cancel");
 	      if (btnRegen) btnRegen.disabled = isLoading;
+      if (btnStyleTech) btnStyleTech.disabled = isLoading;
+      if (btnStyleShort) btnStyleShort.disabled = isLoading;
+      if (btnStyleEditorial) btnStyleEditorial.disabled = isLoading;
       if (UI.batchBtn) UI.batchBtn.disabled = STATE.batchRunning || !isWpAdminPage() || getWpSelectedCount() <= 1;
       if (btnBatchCancel) {
         btnBatchCancel.style.display = STATE.batchRunning ? "" : "none";
@@ -1143,13 +1379,18 @@ Leyenda: ${c}`);
 	      if (btnAlt) btnAlt.style.display = showAlt ? "" : "none";
 	      if (btnTitle) btnTitle.style.display = showTitle ? "" : "none";
 	      if (btnCap) btnCap.style.display = showCap ? "" : "none";
+      if (btnAddSignature) btnAddSignature.style.display = showCap ? "" : "none";
 	      if (btnBoth) btnBoth.style.display = (showAlt && showCap) ? "" : "none";
 
-	      [btnAlt, btnTitle, btnCap, btnBoth].forEach((b) => {
+	      [btnAlt, btnTitle, btnCap, btnAddSignature, btnBoth].forEach((b) => {
 	        if (!b) return;
 	        if (b.dataset.macaFeedback === "1") return;
 	        b.disabled = !isReady;
 	      });
+      if (UI.sessionContextInput) {
+        const desired = String(STATE.sessionContext || "");
+        if (UI.sessionContextInput.value !== desired) UI.sessionContextInput.value = desired;
+      }
     }
 
     if (UI.mini) {
@@ -1182,13 +1423,15 @@ Leyenda: ${c}`);
       return;
     }
 
-    const { alt, title, leyenda } = STATE.pendingResult;
+    const { alt, title, leyenda, seoReview } = STATE.pendingResult;
     STATE.pendingResult = null;
     STATE.alt = alt || "";
     STATE.title = title || alt || "";
     STATE.leyenda = leyenda || "";
+    STATE.seoReview = seoReview || null;
     STATE.status = "ready";
     STATE.error = "";
+    clearLoadingWatchdog();
     updateUI();
 
 	    // Optional: auto-fill WordPress fields as soon as we have a result.
@@ -1218,9 +1461,10 @@ Leyenda: ${c}`);
     }
   }
 
-  function handleOpen({ jobId, imgUrl, pageUrl, generateMode, wpAutoApply, wpAutoApplyRequireMedia, onCompleteAction }) {
+  function handleOpen({ jobId, imgUrl, pageUrl, sessionContext, generateMode, wpAutoApply, wpAutoApplyRequireMedia, onCompleteAction }) {
     clearApplyTimer();
 	    clearAutoApplyTimer();
+    clearLoadingWatchdog();
     STATE.jobId = jobId;
     STATE.imgUrl = imgUrl || "";
     STATE.pageUrl = pageUrl || "";
@@ -1231,20 +1475,33 @@ Leyenda: ${c}`);
     STATE.alt = "";
     STATE.title = "";
     STATE.leyenda = "";
+    STATE.seoReview = null;
+    STATE.sessionContext = String(sessionContext || "");
     STATE.status = "loading";
     STATE.error = "";
     STATE.loadingSince = Date.now();
     STATE.firstPaintDone = false;
     STATE.pendingResult = null;
+    armLoadingWatchdog();
 
     removeMini();
     showOverlay();
+    if (!STATE.sessionContext) {
+      chrome.runtime.sendMessage({ type: "MACA_GET_SESSION_CONTEXT" })
+        .then((res) => {
+          const c = String(res?.context || "").trim();
+          if (!c) return;
+          STATE.sessionContext = c;
+          if (UI.sessionContextInput) UI.sessionContextInput.value = c;
+        })
+        .catch(() => {});
+    }
   }
 
-  function handleResult({ jobId, alt, title, leyenda }) {
+  function handleResult({ jobId, alt, title, leyenda, seoReview }) {
     if (STATE.jobId && jobId && jobId !== STATE.jobId) return;
 
-    STATE.pendingResult = { alt, title, leyenda };
+    STATE.pendingResult = { alt, title, leyenda, seoReview: seoReview || null };
     tryApplyPendingResult();
   }
 
@@ -1270,6 +1527,12 @@ function handleProgress(msg) {
           const txt = UI.statusBox.querySelector(".status-text");
           if (txt) txt.textContent = `Procesando ${current}/${total}...`;
         }
+      } else if (phase === "qa_skip_item") {
+        if (UI.statusBox) {
+          const txt = UI.statusBox.querySelector(".status-text");
+          const skipped = Number(msg?.qaSkipped || 0);
+          if (txt) txt.textContent = `QA: ${skipped} en revisión manual (${current}/${total}).`;
+        }
       } else if (phase === "done") {
         STATE.batchRunning = false;
         STATE.batchCancelling = false;
@@ -1278,7 +1541,11 @@ function handleProgress(msg) {
         updateUI();
         if (UI.statusBox) {
           const txt = UI.statusBox.querySelector(".status-text");
-          if (txt) txt.textContent = `Selección procesada (${total}/${total}).`;
+          const skipped = Number(msg?.qaSkipped || 0);
+          if (txt) {
+            if (skipped > 0) txt.textContent = `Selección procesada (${total}/${total}). ${skipped} en revisión manual por QA.`;
+            else txt.textContent = `Selección procesada (${total}/${total}).`;
+          }
         }
         updateBatchButtonUi();
       } else if (phase === "cancelled") {
@@ -1299,10 +1566,12 @@ function handleProgress(msg) {
   function handleError({ jobId, error }) {
     if (STATE.jobId && jobId && jobId !== STATE.jobId) return;
     clearApplyTimer();
+    clearLoadingWatchdog();
     STATE.pendingResult = null;
     STATE.status = "error";
     STATE.batchRunning = false;
     STATE.batchCancelling = false;
+    STATE.seoReview = null;
     STATE.error = error || "desconocido";
     updateUI();
     updateBatchButtonUi();

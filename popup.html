@@ -15,8 +15,22 @@
     </div>
   </header>
 
+  <section class="quick">
+    <label class="toggle"><input id="quickEnabled" type="checkbox" /> Extensión activa</label>
+    <label class="toggle"><input id="quickUseSignature" type="checkbox" /> Añadir firma en análisis manual</label>
+    <label class="toggle"><input id="quickAutoUpload" type="checkbox" /> Auto-generar al subir varias (experimental)</label>
+    <div class="quick-row">
+      <label for="quickSignaturePreset">Firma activa</label>
+      <select id="quickSignaturePreset"></select>
+    </div>
+    <div class="quick-row">
+      <button id="openOptionsAdvanced" class="btn">Ajustes avanzados</button>
+    </div>
+  </section>
+
   <div class="search">
     <input id="q" type="search" placeholder="Buscar en el historial..." />
+    <div id="historyInfo" class="history-info"></div>
   </div>
 
   <main>

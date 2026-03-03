@@ -37,14 +37,19 @@ const DEFAULT_SYNC_CFG = {
   historyEnabled: true,
   // Generation controls
   generateMode: "both", // both | alt | caption
+  sectionStyleProfile: "general", // general | review | news | comparison
   altMaxLength: 125, // 0 => unlimited
   avoidImagePrefix: true,
+  secondPassQualityEnabled: false,
   // Allow ALT to be empty only when the model marks the image as decorative.
   allowDecorativeAltEmpty: false,
   // Caption template
   captionTemplateEnabled: false,
   captionTemplate: "{{caption}}",
   captionSignatureText: "",
+  captionSignatures: [],
+  activeCaptionSignatureId: "",
+  contextMenuUseSignature: false,
   autoCaptionSignatureOnAutoFill: false,
   autoQueueModeVisible: true,
   autoUploadSafetyFuseEnabled: true,
@@ -55,12 +60,15 @@ const DEFAULT_SYNC_CFG = {
   postValidationTitleMaxWords: 8,
   postValidationAltMinChars: 0,
   postValidationCaptionMinChars: 0,
+  batchQaModeEnabled: false,
+  batchQaMinLevel: "ok", // ok | warning
   // Debug
   debugEnabled: false,
   shortcutEnabled: false,
   // If true, store and read apiKey from chrome.storage.sync (Google account)
   // instead of chrome.storage.local (this device).
   syncApiKey: false,
+  extensionEnabled: true,
   provider: "openai",
   model: "gpt-5-mini",
   prompt: "",
@@ -181,6 +189,108 @@ function safeHost(pageUrl) {
   try { return new URL(pageUrl || "").hostname || ""; } catch (_) { return ""; }
 }
 
+function sanitizeSessionContext(text) {
+  return String(text || "").replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+function setSessionContextForTab(tabId, text) {
+  if (tabId == null) return;
+  const clean = sanitizeSessionContext(text);
+  if (!clean) __sessionContextByTab.delete(tabId);
+  else __sessionContextByTab.set(tabId, clean);
+}
+
+function getSessionContextForTab(tabId) {
+  if (tabId == null) return "";
+  return sanitizeSessionContext(__sessionContextByTab.get(tabId) || "");
+}
+
+function buildSessionContextBlock(sessionContext) {
+  const s = sanitizeSessionContext(sessionContext);
+  if (!s) return "";
+  return `\nContexto editorial de sesión (solo como guía, no inventes datos): "${s}"\n`;
+}
+
+const SECTION_STYLE_PROFILES = {
+  general: "",
+  review: [
+    "Sección editorial: review/análisis.",
+    "- Prioriza precisión técnica visible.",
+    "- Evita adjetivos promocionales.",
+    "- Mantén tono profesional y objetivo."
+  ].join("\n"),
+  news: [
+    "Sección editorial: noticia.",
+    "- Prioriza claridad y concisión.",
+    "- Tono informativo, directo y neutro.",
+    "- Evita exceso de tecnicismos."
+  ].join("\n"),
+  comparison: [
+    "Sección editorial: comparativa.",
+    "- Destaca el elemento diferencial visible en la imagen.",
+    "- Tono analítico, sin marketing.",
+    "- Sé específico y evita frases vagas."
+  ].join("\n")
+};
+
+function getSectionStyleBlock(profile) {
+  const key = String(profile || "general").trim().toLowerCase();
+  return SECTION_STYLE_PROFILES[key] || SECTION_STYLE_PROFILES.general;
+}
+
+function getToneOverrideBlock(styleOverride) {
+  const key = String(styleOverride || "").trim().toLowerCase();
+  if (key === "technical") {
+    return [
+      "Reescritura de estilo: más técnico.",
+      "- Usa terminología técnica visible cuando aporte claridad.",
+      "- No alargues innecesariamente."
+    ].join("\n");
+  }
+  if (key === "short") {
+    return [
+      "Reescritura de estilo: más corto.",
+      "- ALT: intenta 70-95 caracteres.",
+      "- TITLE: 2-5 palabras.",
+      "- LEYENDA: una frase breve."
+    ].join("\n");
+  }
+  if (key === "editorial") {
+    return [
+      "Reescritura de estilo: más editorial.",
+      "- Mantén tono periodístico natural.",
+      "- Añade contexto visual sin promoción."
+    ].join("\n");
+  }
+  return "";
+}
+
+function normalizeSignatureList(rawList, legacyText = "") {
+  const list = Array.isArray(rawList) ? rawList : [];
+  const out = [];
+  for (const it of list) {
+    if (!it || typeof it !== "object") continue;
+    const id = String(it.id || "").trim() || crypto.randomUUID();
+    const name = String(it.name || "").trim() || "Firma";
+    const text = String(it.text || "").trim();
+    if (!text) continue;
+    out.push({ id, name, text });
+  }
+  if (!out.length) {
+    const legacy = String(legacyText || "").trim();
+    if (legacy) out.push({ id: "default", name: "Firma principal", text: legacy });
+  }
+  return out;
+}
+
+function getActiveSignatureText(cfg) {
+  const list = normalizeSignatureList(cfg?.captionSignatures, cfg?.captionSignatureText);
+  if (!list.length) return "";
+  const activeId = String(cfg?.activeCaptionSignatureId || "").trim();
+  const active = list.find((x) => x.id === activeId) || list[0];
+  return String(active?.text || "").trim();
+}
+
 function extractFilenameFromImageUrl(imageUrl) {
   try {
     const u = new URL(String(imageUrl || ""));
@@ -253,17 +363,26 @@ function buildOpenAICompatUrl(endpoint) {
   return `${ep}/v1/chat/completions`;
 }
 
-async function safeJson(res) {
+async function safeJson(res, timeoutMs = 30000) {
+  const ms = Math.max(1000, Number(timeoutMs) || 30000);
+  let id = null;
+  const timer = new Promise((_, reject) => {
+    id = setTimeout(() => reject(new Error(`Timeout leyendo respuesta del proveedor (${ms} ms).`)), ms);
+  });
+  let txt = "";
   try {
-    return await res.json();
+    txt = await Promise.race([res.text(), timer]);
+  } catch (err) {
+    throw new Error(err?.message || "Timeout leyendo respuesta del proveedor.");
+  } finally {
+    if (id) clearTimeout(id);
+  }
+  const body = String(txt || "").trim();
+  if (!body) return {};
+  try {
+    return JSON.parse(body);
   } catch (_) {
-    try {
-      const txt = await res.text();
-      return { message: txt };
-    } catch (__)
-    {
-      return {};
-    }
+    return { message: body };
   }
 }
 
@@ -327,23 +446,40 @@ function isOpenRouterGlm(provider, model) {
 
 function getOpenRouterGlmQualityPrompt(mode) {
   const m = String(mode || "both");
-  const outLines =
+  const schema =
     m === "alt"
-      ? ["ALT: <texto final>", "TITLE: <texto final breve>"]
+      ? '{"alt":"...","title":"...","decorativa":false}'
       : (m === "caption"
-        ? ["LEYENDA: <frase final breve>"]
-        : ["ALT: <texto final>", "TITLE: <texto final breve (3-6 palabras)>", "LEYENDA: <frase final breve>"]);
+        ? '{"leyenda":"..."}'
+        : '{"alt":"...","title":"...","leyenda":"...","decorativa":false}');
   return [
     "MODO CALIDAD (OpenRouter/GLM):",
-    "- Describe SOLO lo visible en la imagen, sin inventar.",
-    "- Evita frases genéricas como: \"pantalla encendida\", \"contenido multimedia\", \"imagen de\", \"foto de\".",
-    "- ALT: 90-125 caracteres, descriptivo y concreto.",
-    "- TITLE: 3-6 palabras, claro y natural.",
-    "- LEYENDA: 1 frase editorial breve, con contexto visual.",
-    "- No devuelvas razonamiento, pasos, ni explicaciones.",
-    "- Devuelve SOLO la salida final en el formato solicitado.",
-    ...outLines
+    "- Usa español de España (es-ES). Evita latinismos y regionalismos de Latinoamérica.",
+    "- Describe SOLO lo visible, sin inventar datos técnicos o marcas no legibles.",
+    "- ALT: concreto, natural y útil para accesibilidad.",
+    "- TITLE: 2-8 palabras, nunca repitas el ALT completo.",
+    "- LEYENDA: 1 frase editorial breve; evita relleno.",
+    "- Prohibido devolver razonamiento, explicaciones o texto fuera del JSON.",
+    "- Salida obligatoria: JSON válido y nada más.",
+    schema
   ].join("\n");
+}
+
+function getSpanishLocaleGuard(lang) {
+  const s = String(lang || "").toLowerCase();
+  if (!s.startsWith("es")) return "";
+  return "\nIdioma obligatorio: español de España (es-ES). Usa terminología de España y evita variantes regionales latinoamericanas.\n";
+}
+
+function normalizeTitleText(title, { minWords = 2, maxWords = 8 } = {}) {
+  let s = normalizeCaptionText(title || "");
+  if (!s) return "";
+  const words = s.split(/\s+/).filter(Boolean);
+  if (!words.length) return "";
+  if (words.length > Math.max(1, maxWords)) {
+    s = words.slice(0, Math.max(1, maxWords)).join(" ");
+  }
+  return s.trim();
 }
 
 function ensureTrailingPeriod(text) {
@@ -440,16 +576,13 @@ async function copySequenceToClipboard(texts, delayMs = 260) {
 
 // =========================
 // Context menu (WordPress-only)
-// - Two entries:
-//   1) Analyze normally.
-//   2) Analyze and apply caption signature.
+// - Single entry. Signature behavior is controlled via settings.
 //
 // IMPORTANT: We avoid removeAll/recreate cycles because they can race on MV3 wake-ups
 // and cause "Cannot create item with duplicate id" in Chromium.
 // =========================
 
 const MENU_ID_NORMAL = "maca-analyze";
-const MENU_ID_SIGNED = "maca-analyze-signed";
 
 function isWpAdminUrl(u) {
   const s = String(u || "");
@@ -469,22 +602,14 @@ function ensureMenu() {
   __menuEnsured = true;
   if (!chrome?.contextMenus?.create) return;
   try {
+    // Cleanup legacy menu id from previous versions.
+    chrome.contextMenus.remove("maca-analyze-signed", () => {
+      void chrome.runtime.lastError;
+    });
     chrome.contextMenus.create(
       {
         id: MENU_ID_NORMAL,
         title: "Analizar imagen con maca",
-        contexts: ["all"],
-        documentUrlPatterns: ["*://*/*wp-admin/*"]
-      },
-      () => {
-        // Always read lastError to prevent "Unchecked runtime.lastError" noise.
-        void chrome.runtime.lastError;
-      }
-    );
-    chrome.contextMenus.create(
-      {
-        id: MENU_ID_SIGNED,
-        title: "Analizar y rellenar con firma",
         contexts: ["all"],
         documentUrlPatterns: ["*://*/*wp-admin/*"]
       },
@@ -510,6 +635,7 @@ if (chrome?.commands?.onCommand?.addListener) {
     (async () => {
       const cfg = await getConfigCached();
       if (!cfg?.shortcutEnabled) return;
+      if (cfg?.extensionEnabled === false) return;
 
       // Some Chromium variants don't pass `tab` to onCommand.
       let activeTab = tab;
@@ -586,6 +712,7 @@ if (chrome?.commands?.onCommand?.addListener) {
         jobId,
         imgUrl,
         pageUrl,
+        sessionContext: getSessionContextForTab(tabId),
         generateMode: String(cfg.generateMode || "both"),
         wpAutoApply: !!cfg.wpAutoApply,
         wpAutoApplyRequireMedia: !!cfg.wpAutoApplyRequireMedia,
@@ -594,11 +721,12 @@ if (chrome?.commands?.onCommand?.addListener) {
       });
 
       try {
-        const { alt, title, leyenda, decorativa } = await analyzeImage({
+        const { alt, title, leyenda, seoReview, decorativa } = await analyzeImage({
           imageUrl: imgUrl,
           filenameContext,
           pageUrl,
-          withCaptionSignature: !!cfg.wpAutoApply && !!cfg.autoCaptionSignatureOnAutoFill,
+          tabId,
+          withCaptionSignature: !!cfg.contextMenuUseSignature,
           source: "shortcut"
         });
 
@@ -607,7 +735,8 @@ if (chrome?.commands?.onCommand?.addListener) {
           jobId,
           alt,
           title,
-          leyenda
+          leyenda,
+          seoReview
         });
       } catch (err) {
         await addMetricsSample(cfg, {
@@ -637,6 +766,7 @@ const __autoUploadPausedByTab = new Map();
 const __autoUploadPendingIdsByTab = new Map();
 const __batchCancelByTab = new Map();
 const __batchAbortByTab = new Map();
+const __sessionContextByTab = new Map();
 
 function wasRecentlyAutoProcessed(tabId, attachmentId, ttlMs = 5 * 60 * 1000) {
   const byTab = __autoUploadSeenByTab.get(tabId);
@@ -760,6 +890,48 @@ function shouldFallbackOpenRouterCompatibility(status, json) {
   );
 }
 
+function isRetriableOpenRouterStatus(status) {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+function trimErrorText(v, maxLen = 260) {
+  const s = String(v == null ? "" : v).replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  return s.length > maxLen ? `${s.slice(0, maxLen)}...` : s;
+}
+
+function extractOpenRouterErrorMessage(status, json) {
+  const parts = [];
+  const base = trimErrorText(json?.error?.message || json?.error || json?.message || "");
+  if (base) parts.push(base);
+
+  const code = trimErrorText(json?.error?.code || json?.code || "");
+  if (code) parts.push(`code=${code}`);
+
+  const provider = trimErrorText(
+    json?.error?.metadata?.provider_name ||
+    json?.provider ||
+    json?.error?.provider ||
+    ""
+  );
+  if (provider) parts.push(`provider=${provider}`);
+
+  const upstream = trimErrorText(
+    json?.error?.metadata?.raw ||
+    json?.error?.metadata?.upstream_error ||
+    json?.error?.metadata?.cause ||
+    ""
+  );
+  if (upstream) parts.push(`upstream=${upstream}`);
+
+  if (parts.length) return parts.join(" | ");
+  return `Error OpenRouter (${status})`;
+}
+
+async function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
 function countWords(s) {
   const t = String(s || "").trim();
   if (!t) return 0;
@@ -778,6 +950,111 @@ function isGenericText(s) {
     "foto"
   ];
   return banned.includes(t);
+}
+
+function buildSeoReview({ mode, alt, title, leyenda, cfg, altAllowedEmpty }) {
+  const m = String(mode || "both");
+  const out = {
+    level: "ok",
+    badge: "OK",
+    score: 100,
+    issues: [],
+    suggestions: []
+  };
+  const pushIssue = (severity, field, message, suggestion = "") => {
+    out.issues.push({ severity, field, message });
+    if (suggestion) out.suggestions.push(suggestion);
+    if (severity === "error") out.score -= 30;
+    else out.score -= 12;
+  };
+
+  const altTxt = String(alt || "").trim();
+  const titleTxt = String(title || "").trim();
+  const capTxt = String(leyenda || "").trim();
+  const altMax = Number.isFinite(Number(cfg?.altMaxLength)) ? Number(cfg.altMaxLength) : 125;
+
+  if (m !== "caption") {
+    if (!altAllowedEmpty) {
+      if (!altTxt) pushIssue("error", "alt", "ALT vacío.", "Describe el sujeto principal visible en la imagen.");
+      else if (altTxt.length < 12) pushIssue("warning", "alt", "ALT demasiado corto.", "Añade un poco más de contexto visual.");
+    }
+    if (altMax > 0 && altTxt.length > altMax) {
+      pushIssue("error", "alt", `ALT supera ${altMax} caracteres.`, "Acorta el ALT manteniendo solo lo esencial.");
+    }
+    if (isGenericText(altTxt)) {
+      pushIssue("error", "alt", "ALT demasiado genérico.", "Sustituye por una descripción concreta de lo visible.");
+    }
+    if (/^\s*(imagen|foto)\s+de\b/i.test(altTxt)) {
+      pushIssue("warning", "alt", "ALT empieza por 'imagen/foto de'.", "Empieza directamente por el contenido visible.");
+    }
+    const tw = countWords(titleTxt);
+    if (!titleTxt) pushIssue("warning", "title", "Title vacío.", "Usa un title breve de 2 a 8 palabras.");
+    else {
+      if (tw < 2) pushIssue("warning", "title", "Title demasiado corto.", "Usa entre 2 y 8 palabras.");
+      if (tw > 8) pushIssue("warning", "title", "Title demasiado largo.", "Reduce el title a 2-8 palabras.");
+    }
+  }
+
+  if (m !== "alt") {
+    if (!capTxt) pushIssue("error", "leyenda", "Leyenda vacía.", "Añade una frase editorial breve.");
+    else {
+      if (capTxt.length < 18) pushIssue("warning", "leyenda", "Leyenda muy corta.", "Añade contexto editorial mínimo.");
+      if (!/[.!?…]$/.test(capTxt)) pushIssue("warning", "leyenda", "Leyenda sin cierre de frase.", "Termina la frase con puntuación final.");
+      if (isGenericText(capTxt)) pushIssue("error", "leyenda", "Leyenda demasiado genérica.", "Describe la escena con más precisión.");
+    }
+  }
+
+  out.score = Math.max(0, Math.min(100, out.score));
+  const hasError = out.issues.some((i) => i.severity === "error");
+  const hasWarning = out.issues.some((i) => i.severity === "warning");
+  if (hasError) {
+    out.level = "error";
+    out.badge = "Error";
+  } else if (hasWarning) {
+    out.level = "warning";
+    out.badge = "Mejorable";
+  } else {
+    out.level = "ok";
+    out.badge = "OK";
+  }
+  return out;
+}
+
+function runSecondPassQuality({ mode, alt, title, leyenda, cfg }) {
+  if (!cfg?.secondPassQualityEnabled) return { alt, title, leyenda };
+  const m = String(mode || "both");
+  let a = String(alt || "");
+  let t = String(title || "");
+  let c = String(leyenda || "");
+
+  // Keep second pass deterministic and conservative to avoid changing semantics.
+  a = normalizeAltText(a, Number.isFinite(Number(cfg?.altMaxLength)) ? Number(cfg.altMaxLength) : 125, cfg?.avoidImagePrefix !== false);
+  t = normalizeTitleText(t || a, { minWords: 2, maxWords: 8 });
+  c = normalizeCaptionText(c);
+
+  if (m !== "alt" && c) {
+    c = c.replace(/\s{2,}/g, " ");
+    if (!/[.!?…]$/.test(c)) c = `${c}.`;
+  }
+  if (m !== "caption" && !t && a) {
+    t = normalizeTitleText(a, { minWords: 2, maxWords: 6 });
+  }
+  return { alt: a, title: t, leyenda: c };
+}
+
+function seoLevelRank(level) {
+  const s = String(level || "").toLowerCase();
+  if (s === "ok") return 2;
+  if (s === "warning") return 1;
+  return 0;
+}
+
+function passesBatchQa(seoReview, cfg) {
+  if (!cfg?.batchQaModeEnabled) return true;
+  const minLevel = String(cfg?.batchQaMinLevel || "ok").toLowerCase();
+  const current = seoLevelRank(seoReview?.level || "error");
+  const min = seoLevelRank(minLevel);
+  return current >= min;
 }
 
 function applyPostValidation(cfg, { mode, alt, title, leyenda, decorative, altAllowedEmpty }) {
@@ -916,20 +1193,21 @@ if (chrome?.runtime?.onMessage?.addListener) {
 // Keep menu visibility in sync right before showing.
 if (chrome?.contextMenus?.onShown?.addListener) {
   chrome.contextMenus.onShown.addListener((info, tab) => {
-    try {
-      ensureMenu();
-      const pageUrl = info?.pageUrl || tab?.url || "";
-      const inWp = isWpAdminUrl(pageUrl);
-      chrome.contextMenus.update(MENU_ID_NORMAL, { visible: inWp }, () => {
-        void chrome.runtime.lastError;
-      });
-      chrome.contextMenus.update(MENU_ID_SIGNED, { visible: inWp }, () => {
-        void chrome.runtime.lastError;
+    (async () => {
+      try {
+        ensureMenu();
+        const pageUrl = info?.pageUrl || tab?.url || "";
+        const inWp = isWpAdminUrl(pageUrl);
+        const cfg = await getConfigCached().catch(() => DEFAULT_SYNC_CFG);
+        const visible = inWp && cfg?.extensionEnabled !== false;
+        chrome.contextMenus.update(MENU_ID_NORMAL, { visible }, () => {
+          void chrome.runtime.lastError;
+        });
         chrome.contextMenus.refresh?.();
-      });
-    } catch (_) {
-      // ignore
-    }
+      } catch (_) {
+        // ignore
+      }
+    })();
   });
 }
 
@@ -953,6 +1231,7 @@ if (chrome?.tabs?.onRemoved?.addListener) {
     __autoUploadPendingIdsByTab.delete(tabId);
     __batchCancelByTab.delete(tabId);
     __batchAbortByTab.delete(tabId);
+    __sessionContextByTab.delete(tabId);
   });
 }
 
@@ -1002,9 +1281,8 @@ if (chrome?.contextMenus?.onClicked?.addListener) chrome.contextMenus.onClicked.
     const jobId = crypto.randomUUID();
 
 
-    if (info.menuItemId === MENU_ID_NORMAL || info.menuItemId === MENU_ID_SIGNED) {
+    if (info.menuItemId === MENU_ID_NORMAL) {
       const inWp = isWpAdminUrl(t.url || info?.pageUrl || "");
-      const useCaptionSignature = info.menuItemId === MENU_ID_SIGNED;
 
       if (!inWp) {
         await ensureOverlayInjected(tabId);
@@ -1051,12 +1329,22 @@ if (chrome?.contextMenus?.onClicked?.addListener) chrome.contextMenus.onClicked.
 
       // Show overlay immediately (loading state)
       const cfg = await getConfigCached();
+      if (cfg?.extensionEnabled === false) {
+        await ensureOverlayInjected(tabId);
+        await sendOverlay(tabId, {
+          type: "MACA_OVERLAY_ERROR",
+          jobId,
+          error: "maca está desactivada en ajustes rápidos."
+        });
+        return;
+      }
       await ensureOverlayInjected(tabId);
       await sendOverlay(tabId, {
         type: "MACA_OVERLAY_OPEN",
         jobId,
         imgUrl,
         pageUrl,
+        sessionContext: getSessionContextForTab(tabId),
         generateMode: String(cfg.generateMode || "both"),
         wpAutoApply: !!cfg.wpAutoApply,
         wpAutoApplyRequireMedia: !!cfg.wpAutoApplyRequireMedia,
@@ -1066,11 +1354,12 @@ if (chrome?.contextMenus?.onClicked?.addListener) chrome.contextMenus.onClicked.
 
       // Run analysis and update overlay when ready
       try {
-        const { alt, title, leyenda, decorativa } = await analyzeImage({
+        const { alt, title, leyenda, seoReview, decorativa } = await analyzeImage({
           imageUrl: imgUrl,
           filenameContext,
           pageUrl,
-          withCaptionSignature: useCaptionSignature || (!!cfg.wpAutoApply && !!cfg.autoCaptionSignatureOnAutoFill),
+          tabId,
+          withCaptionSignature: !!cfg.contextMenuUseSignature,
           source: "contextmenu"
         });
 
@@ -1079,7 +1368,8 @@ if (chrome?.contextMenus?.onClicked?.addListener) chrome.contextMenus.onClicked.
           jobId,
           alt,
           title,
-          leyenda
+          leyenda,
+          seoReview
         });
       } catch (err) {
         await addMetricsSample(cfg, {
@@ -1104,7 +1394,17 @@ if (chrome?.contextMenus?.onClicked?.addListener) chrome.contextMenus.onClicked.
 // Shared analysis pipeline (WP button + context menu)
 // =========================
 
-async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSignature = false, modeOverride = "", abortSignal = null, source = "manual" }) {
+async function analyzeImage({
+  imageUrl,
+  filenameContext,
+  pageUrl,
+  withCaptionSignature = false,
+  modeOverride = "",
+  styleOverride = "",
+  tabId = null,
+  abortSignal = null,
+  source = "manual"
+}) {
   if (!isWpAdminUrl(pageUrl || "")) {
     throw new Error("maca está limitada a WordPress (wp-admin).");
   }
@@ -1114,11 +1414,24 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
 
   const startedAt = Date.now();
   const cfg = await getConfigCached();
+  if (cfg?.extensionEnabled === false) {
+    throw new Error("maca está desactivada en ajustes rápidos.");
+  }
   const selectedModel = (cfg.provider === "local_ollama" || cfg.provider === "local_openai")
     ? (cfg.localModel || cfg.model || "")
     : cfg.model;
   const mode = String(modeOverride || cfg.generateMode || "both"); // both | alt | caption
-  await addDebugLog(cfg, "analyze_start", { provider: cfg.provider, model: cfg.model, mode: String(modeOverride || cfg.generateMode || "both"), pageHost: safeHost(pageUrl), imageUrl });
+  const sessionContext = getSessionContextForTab(tabId);
+  await addDebugLog(cfg, "analyze_start", {
+    provider: cfg.provider,
+    model: cfg.model,
+    mode: String(modeOverride || cfg.generateMode || "both"),
+    styleOverride: String(styleOverride || ""),
+    pageHost: safeHost(pageUrl),
+    imageUrl,
+    filenameContext: String(filenameContext || ""),
+    sessionContext
+  });
 
   const isLocal = cfg.provider === "local_ollama" || cfg.provider === "local_openai";
   if (!isLocal && !cfg.apiKey) {
@@ -1135,11 +1448,13 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
   const allowDecorativeAltEmpty = (cfg.allowDecorativeAltEmpty !== undefined) ? !!cfg.allowDecorativeAltEmpty : false;
   const captionTemplateEnabled = (cfg.captionTemplateEnabled !== undefined) ? !!cfg.captionTemplateEnabled : false;
   const captionTemplate = String(cfg.captionTemplate || "{{caption}}");
-  const captionSignatureText = String(cfg.captionSignatureText || "").trim();
+  const captionSignatureText = getActiveSignatureText(cfg);
 
   const usingCustomPrompt = !!(cfg.prompt && cfg.prompt.trim());
   let basePrompt = usingCustomPrompt ? cfg.prompt : getPromptForProfile(cfg.seoProfile);
   const useOpenRouterGlm = isOpenRouterGlm(cfg.provider, selectedModel);
+  const sectionStyleBlock = getSectionStyleBlock(cfg?.sectionStyleProfile);
+  const toneOverrideBlock = getToneOverrideBlock(styleOverride);
   const requestOptions = (opts) => {
     if (!abortSignal) return opts;
     return { ...(opts || {}), signal: abortSignal };
@@ -1155,6 +1470,10 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
 
   const finalPrompt =
     contextBlock +
+    buildSessionContextBlock(sessionContext) +
+    (sectionStyleBlock ? `\n${sectionStyleBlock}\n` : "") +
+    (toneOverrideBlock ? `\n${toneOverrideBlock}\n` : "") +
+    getSpanishLocaleGuard(getEffectiveLang(cfg)) +
     renderPrompt(basePrompt, {
       LANG: getEffectiveLang(cfg),
       PAGE_URL: pageUrl || "",
@@ -1230,7 +1549,7 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
       "X-Title": "maca for Chrome"
     };
 
-    const makeBody = (withDocsParams = true, withSchema = true) => {
+    const makeBody = ({ withDocsParams = true, withSchema = true, forceAllowFallbacks = false } = {}) => {
       const body = {
         model,
         messages: [
@@ -1242,11 +1561,15 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
             ]
           }
         ],
-        max_tokens: 500
+        max_tokens: 420,
+        temperature: 0.2
       };
       if (useGlmModel && withDocsParams) {
         body.provider = { allow_fallbacks: false, require_parameters: true };
         body.reasoning = { exclude: true, effort: "none" };
+      } else if (useGlmModel && forceAllowFallbacks) {
+        // Last-resort compatibility mode: let OpenRouter reroute if one upstream provider is unstable.
+        body.provider = { allow_fallbacks: true };
       }
       if (withSchema) {
         if (mode === "alt") {
@@ -1305,23 +1628,58 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
       return body;
     };
 
-    let res = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", requestOptions({
-      method: "POST",
-      headers,
-      body: JSON.stringify(makeBody(true, true))
-    }));
-    let json = await safeJson(res);
-    if (!res.ok && shouldFallbackOpenRouterCompatibility(res.status, json)) {
-      // Fallback compatibility: remove strict docs params/schema if provider rejects them.
+    const attempts = [
+      { withDocsParams: true, withSchema: true },
+      { withDocsParams: true, withSchema: false },
+      { withDocsParams: false, withSchema: false },
+      { withDocsParams: false, withSchema: false, forceAllowFallbacks: true }
+    ];
+    const openRouterStartedAt = Date.now();
+    const OPENROUTER_MAX_TOTAL_MS = 90000;
+    let res = null;
+    let json = null;
+    let lastErrMsg = "";
+    for (let i = 0; i < attempts.length; i++) {
+      if ((Date.now() - openRouterStartedAt) > OPENROUTER_MAX_TOTAL_MS) {
+        throw new Error("Timeout global OpenRouter (90s).");
+      }
+      const attempt = attempts[i];
       res = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", requestOptions({
         method: "POST",
         headers,
-        body: JSON.stringify(makeBody(false, false))
-      }));
-      json = await safeJson(res);
+        body: JSON.stringify(makeBody(attempt))
+      }), 30000);
+      try {
+        json = await safeJson(res, 25000);
+      } catch (err) {
+        lastErrMsg = err?.message || "Timeout leyendo respuesta de OpenRouter.";
+        await addDebugLog(cfg, "openrouter_response_read_error", {
+          attempt: i + 1,
+          attemptConfig: attempt,
+          status: Number(res?.status || 0),
+          error: lastErrMsg
+        });
+        if (i < attempts.length - 1) {
+          await sleepMs(300 + (i * 250));
+          continue;
+        }
+        throw new Error(lastErrMsg);
+      }
+      if (res.ok) break;
+      lastErrMsg = extractOpenRouterErrorMessage(res.status, json);
+      await addDebugLog(cfg, "openrouter_attempt_fail", {
+        attempt: i + 1,
+        attemptConfig: attempt,
+        status: Number(res?.status || 0),
+        error: lastErrMsg
+      });
+      const canFallback = shouldFallbackOpenRouterCompatibility(res.status, json);
+      const retriable = isRetriableOpenRouterStatus(res.status) || /provider returned error/i.test(lastErrMsg);
+      if ((!canFallback && !retriable) || i >= attempts.length - 1) break;
+      await sleepMs(250 + (i * 200));
     }
     if (!res.ok) {
-      throw new Error(json?.error?.message || json?.error || json?.message || "Error OpenRouter");
+      throw new Error(lastErrMsg || extractOpenRouterErrorMessage(res?.status || 0, json));
     }
     rawOutput = pickTextFromOpenAICompat(json);
   } else if (cfg.provider === "anthropic") {
@@ -1502,6 +1860,10 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
     throw new Error("Proveedor de IA no soportado");
   }
 
+  if (!String(rawOutput || "").trim()) {
+    throw new Error("La IA devolvió una respuesta vacía.");
+  }
+
   const parsed = normalizeModelJson(rawOutput);
   if (!parsed) {
     throw new Error("La IA no devolvió JSON válido.");
@@ -1528,7 +1890,7 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
   }
 
   let altFinal = altProvided ? normalizeAltText(parsed.alt, altMaxLength, avoidImagePrefix) : "";
-  const titleFinal = normalizeCaptionText(
+  let titleFinal = normalizeTitleText(
     titleProvided
       ? parsed.title
       : (altFinal || "")
@@ -1560,8 +1922,24 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
         altFinal = ensureAltTrailingPeriodWithinLimit(noPrefixAlt, altMaxLength);
       }
     }
+    if (!titleFinal && altFinal) {
+      titleFinal = normalizeTitleText(altFinal, { minWords: 2, maxWords: 6 });
+    } else {
+      titleFinal = normalizeTitleText(titleFinal, { minWords: 2, maxWords: 8 });
+    }
     if (leyendaFinal) leyendaFinal = ensureTrailingPeriod(leyendaFinal);
   }
+
+  const secondPass = runSecondPassQuality({
+    mode,
+    alt: altFinal,
+    title: titleFinal,
+    leyenda: leyendaFinal,
+    cfg
+  });
+  altFinal = secondPass.alt;
+  titleFinal = secondPass.title;
+  leyendaFinal = secondPass.leyenda;
 
   if (mode === "alt" && !altFinal && !altAllowedEmpty) throw new Error("La IA no devolvió un ALT válido.");
   if (mode === "caption" && !leyendaFinal) throw new Error("La IA no devolvió una leyenda válida.");
@@ -1580,6 +1958,14 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
   altFinal = validated.alt;
   const titleValidated = validated.title;
   leyendaFinal = validated.leyenda;
+  const seoReview = buildSeoReview({
+    mode,
+    alt: altFinal,
+    title: titleValidated,
+    leyenda: leyendaFinal,
+    cfg,
+    altAllowedEmpty
+  });
 
   const record = {
     id: crypto.randomUUID(),
@@ -1590,6 +1976,7 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
     alt: altFinal,
     title: titleValidated,
     leyenda: leyendaFinal,
+    seoReview,
     decorativa: decorative,
     source: "contextmenu",
     provider: cfg.provider,
@@ -1629,7 +2016,13 @@ async function analyzeImage({ imageUrl, filenameContext, pageUrl, withCaptionSig
     provider: cfg.provider,
     model: selectedModel
   });
-  return { alt: record.alt, title: record.title, leyenda: record.leyenda, decorativa: record.decorativa };
+  return {
+    alt: record.alt,
+    title: record.title,
+    leyenda: record.leyenda,
+    seoReview: record.seoReview,
+    decorativa: record.decorativa
+  };
 }
 
 // =========================
@@ -1703,12 +2096,19 @@ async function testCurrentConfig() {
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "user", content: "ping" }],
-        max_tokens: 1
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "Responde solo con: ok" },
+            { type: "image_url", image_url: { url: "data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=" } }
+          ]
+        }],
+        max_tokens: 4,
+        temperature: 0
       })
     }, 12000);
-    const json = await safeJson(res);
-    if (!res.ok) throw new Error(json?.error?.message || json?.error || json?.message || "Error OpenRouter al validar.");
+    const json = await safeJson(res, 20000);
+    if (!res.ok) throw new Error(extractOpenRouterErrorMessage(res.status, json));
     return okRes({ endpoint: "https://openrouter.ai/api/v1/chat/completions" });
   }
 
@@ -1805,6 +2205,43 @@ async function testCurrentConfig() {
 if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg?.type) return;
 
+  if (msg.type === "MACA_SET_SESSION_CONTEXT") {
+    const tabId = sender?.tab?.id;
+    setSessionContextForTab(tabId, msg?.context || "");
+    sendResponse({ ok: true, context: getSessionContextForTab(tabId) });
+    return true;
+  }
+
+  if (msg.type === "MACA_GET_SESSION_CONTEXT") {
+    const tabId = sender?.tab?.id;
+    sendResponse({ ok: true, context: getSessionContextForTab(tabId) });
+    return true;
+  }
+
+  if (msg.type === "MACA_GET_ACTIVE_SIGNATURE") {
+    (async () => {
+      try {
+        const cfg = await getConfigCached();
+        const list = normalizeSignatureList(cfg?.captionSignatures, cfg?.captionSignatureText);
+        if (!list.length) {
+          sendResponse({ ok: true, text: "", id: "", name: "" });
+          return;
+        }
+        const activeId = String(cfg?.activeCaptionSignatureId || "").trim();
+        const active = list.find((x) => x.id === activeId) || list[0];
+        sendResponse({
+          ok: true,
+          text: String(active?.text || "").trim(),
+          id: String(active?.id || ""),
+          name: String(active?.name || "")
+        });
+      } catch (err) {
+        sendResponse({ ok: false, error: err?.message || String(err), text: "", id: "", name: "" });
+      }
+    })();
+    return true;
+  }
+
   // 1) Analysis (used by WP button)
   if (msg.type === "MACA_ANALYZE_IMAGE") {
     (async () => {
@@ -1815,15 +2252,17 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
         const filenameContext = msg.filenameContext || "";
         const pageUrl = sender.tab?.url || "";
 
-        const { alt, title, leyenda, decorativa } = await analyzeImage({
+        const { alt, title, leyenda, seoReview, decorativa } = await analyzeImage({
           imageUrl,
           filenameContext,
           pageUrl,
-          withCaptionSignature: !!cfg.wpAutoApply && !!cfg.autoCaptionSignatureOnAutoFill,
+          tabId: sender?.tab?.id ?? null,
+          withCaptionSignature: !!cfg.contextMenuUseSignature,
+          styleOverride: String(msg?.styleOverride || ""),
           source: "overlay_manual"
         });
 
-        sendResponse({ alt, title, leyenda, decorativa });
+        sendResponse({ alt, title, leyenda, seoReview, decorativa });
       } catch (err) {
         const cfg = await getConfigCached().catch(() => ({}));
         await addMetricsSample(cfg, {
@@ -1849,14 +2288,16 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
         const imageUrl = msg.imageUrl;
         const filenameContext = msg.filenameContext || "";
         const pageUrl = msg.pageUrl || sender.tab?.url || "";
-        const { alt, title, leyenda, decorativa } = await analyzeImage({
+        const { alt, title, leyenda, seoReview, decorativa } = await analyzeImage({
           imageUrl,
           filenameContext,
           pageUrl,
-          withCaptionSignature: !!cfg.wpAutoApply && !!cfg.autoCaptionSignatureOnAutoFill,
+          tabId: sender?.tab?.id ?? null,
+          withCaptionSignature: !!cfg.contextMenuUseSignature,
+          styleOverride: String(msg?.styleOverride || ""),
           source: "overlay_regenerate"
         });
-        sendResponse({ alt, title, leyenda, decorativa });
+        sendResponse({ alt, title, leyenda, seoReview, decorativa });
       } catch (err) {
         const cfg = await getConfigCached().catch(() => ({}));
         await addMetricsSample(cfg, {
@@ -1907,6 +2348,10 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
         }
 
         const cfg = await getConfigCached();
+        if (cfg?.extensionEnabled === false) {
+          sendResponse({ ok: false, skipped: true, reason: "extension_disabled" });
+          return;
+        }
         if (!cfg?.wpAutoAnalyzeOnUpload) {
           sendResponse({ ok: false, skipped: true, reason: "disabled" });
           return;
@@ -2018,6 +2463,7 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
             imageUrl,
             filenameContext,
             pageUrl,
+            tabId,
             modeOverride: "both",
             withCaptionSignature: !!cfg.autoCaptionSignatureOnAutoFill,
             source: "auto_upload"
@@ -2219,6 +2665,9 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
         const batchAbort = new AbortController();
         __batchAbortByTab.set(tabId, batchAbort);
         const cfg = await getConfigCached();
+        if (cfg?.extensionEnabled === false) {
+          throw new Error("maca está desactivada en ajustes rápidos.");
+        }
 
         await addDebugLog(cfg, "batch_start", { tabId });
 
@@ -2230,6 +2679,7 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
         await sendOverlay(tabId, { type: "MACA_OVERLAY_PROGRESS", phase: "start", current: 0, total: items.length });
 
         const results = [];
+        let qaSkipped = 0;
 
         for (let i = 0; i < items.length; i++) {
           if (__batchCancelByTab.get(tabId) === true) {
@@ -2264,28 +2714,49 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
               imageUrl,
               filenameContext,
               pageUrl: sender.tab?.url || "",
-              withCaptionSignature: !!cfg.autoCaptionSignatureOnAutoFill,
+              tabId,
+              withCaptionSignature: !!cfg.autoCaptionSignatureOnAutoFill || !!cfg.contextMenuUseSignature,
               abortSignal: batchAbort.signal,
               source: "batch"
             });
             results.push({ attachmentId, ...out, imageUrl });
 
-            // In batch mode, always try to apply results into WP fields.
-            const applyPayload = {
-              type: "MACA_APPLY_TO_ATTACHMENT",
-              attachmentId,
-              alt: out.alt || "",
-              title: out.title || "",
-              leyenda: out.leyenda || "",
-              generateMode: String(cfg.generateMode || "both"),
-              requireMedia: (cfg.wpAutoApplyRequireMedia !== undefined) ? !!cfg.wpAutoApplyRequireMedia : true
-            };
-            const applied = await autoApplyAttachmentWithRetry(tabId, applyPayload, { attempts: 12, delayMs: 220 });
-            if (!applied.ok) {
-              throw new Error("No se pudo aplicar el resultado en los campos de Medios.");
+            const canApply = passesBatchQa(out?.seoReview, cfg);
+            if (!canApply) {
+              qaSkipped += 1;
+              await sendOverlay(tabId, {
+                type: "MACA_OVERLAY_PROGRESS",
+                phase: "qa_skip_item",
+                current: i + 1,
+                total: items.length,
+                attachmentId,
+                qaSkipped,
+                seoReview: out?.seoReview || null
+              });
+            } else {
+              // In batch mode, apply only if QA rule allows it.
+              const applyPayload = {
+                type: "MACA_APPLY_TO_ATTACHMENT",
+                attachmentId,
+                alt: out.alt || "",
+                title: out.title || "",
+                leyenda: out.leyenda || "",
+                generateMode: String(cfg.generateMode || "both"),
+                requireMedia: (cfg.wpAutoApplyRequireMedia !== undefined) ? !!cfg.wpAutoApplyRequireMedia : true
+              };
+              const applied = await autoApplyAttachmentWithRetry(tabId, applyPayload, { attempts: 12, delayMs: 220 });
+              if (!applied.ok) {
+                throw new Error("No se pudo aplicar el resultado en los campos de Medios.");
+              }
             }
 
-            await addDebugLog(cfg, "batch_item_ok", { i: i + 1, total: items.length, attachmentId });
+            await addDebugLog(cfg, "batch_item_ok", {
+              i: i + 1,
+              total: items.length,
+              attachmentId,
+              qaSkipped,
+              qaMode: !!cfg.batchQaModeEnabled
+            });
           } catch (errItem) {
             if (__batchCancelByTab.get(tabId) === true || errItem?.name === "AbortError") {
               await sendOverlay(tabId, {
@@ -2311,10 +2782,16 @@ if (chrome?.runtime?.onMessage?.addListener) chrome.runtime.onMessage.addListene
           }
         }
 
-        await sendOverlay(tabId, { type: "MACA_OVERLAY_PROGRESS", phase: "done", current: items.length, total: items.length });
-        await addDebugLog(cfg, "batch_done", { total: items.length });
+        await sendOverlay(tabId, {
+          type: "MACA_OVERLAY_PROGRESS",
+          phase: "done",
+          current: items.length,
+          total: items.length,
+          qaSkipped
+        });
+        await addDebugLog(cfg, "batch_done", { total: items.length, qaSkipped, qaMode: !!cfg.batchQaModeEnabled });
 
-        sendResponse({ ok: true, total: items.length, results });
+        sendResponse({ ok: true, total: items.length, qaSkipped, results });
       } catch (err) {
         const cfg = await getConfigCached().catch(() => ({}));
         await addDebugLog(cfg, "batch_error", { error: err?.message || String(err) });

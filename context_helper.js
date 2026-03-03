@@ -109,7 +109,7 @@
       if (!node || node.nodeType !== 1) return false;
       const el = node;
       if (el.matches?.(".attachment.uploading, .uploading, .media-progress-bar, .uploader-inline .uploading")) return true;
-      if (el.matches?.("li.attachment[data-id]") && /\bupload/i.test(String(el.className || ""))) return true;
+      if (el.matches?.("li.attachment[data-id]") && /\buploading\b/i.test(String(el.className || ""))) return true;
       if (el.querySelector?.(".attachment.uploading, .uploading, .media-progress-bar, .uploader-inline .uploading")) return true;
       return false;
     } catch (_) {
@@ -824,9 +824,16 @@
     } else if (initial && meta.initialScan !== false) {
       meta.initialScan = true;
     }
-    if (/\bupload/i.test(cls)) {
+    if (/\buploading\b/i.test(cls)) {
       meta.sawUploading = true;
       markUploadSignal();
+    }
+    if (!meta.sawUploading && hasRecentUploadSignal() && !initial) {
+      if (Number(AUTO_UPLOAD.pendingExpected || 0) > 0) {
+        AUTO_UPLOAD.pendingExpected = Math.max(0, Number(AUTO_UPLOAD.pendingExpected || 0) - 1);
+        markUploadSignal();
+        meta.sawUploading = true;
+      }
     }
     return { id, meta };
   }
@@ -841,7 +848,8 @@
       const selected = isSelectedAttachmentEl(el);
       const fromUpload = !!meta.sawUploading;
       const isMultiUpload = countRecentUploadMarked() >= 2;
-      const allowBatchUploadFlow = isMultiUpload && fromUpload;
+      const inUploadSession = hasRecentUploadSignal() && Number(AUTO_UPLOAD.uploadSessionStartAt || 0) > 0;
+      const allowBatchUploadFlow = fromUpload && isMultiUpload && inUploadSession;
       const userJustSelected = (Date.now() - LAST_USER_SELECT_AT) < 3000;
       const allowSelectFeature = AUTO_UPLOAD_SETTINGS.autoAnalyzeOnSelectMedia && selected && userJustSelected;
 
@@ -977,11 +985,17 @@
       window.__macaAutoUploadObserver = obs;
 
       // Fallback hooks: selection changes in WP don't always mutate useful attrs.
-      root.addEventListener("click", () => {
+      root.addEventListener("click", (ev) => {
+        const target = ev?.target;
+        const onAttachment = !!target?.closest?.("li.attachment[data-id]");
+        if (!onAttachment) return;
         LAST_USER_SELECT_AT = Date.now();
         setTimeout(scanSelected, 50);
       }, true);
-      root.addEventListener("keyup", () => {
+      root.addEventListener("keyup", (ev) => {
+        const target = ev?.target;
+        const inAttachment = !!target?.closest?.("li.attachment[data-id]");
+        if (!inAttachment) return;
         LAST_USER_SELECT_AT = Date.now();
         setTimeout(scanSelected, 50);
       }, true);
