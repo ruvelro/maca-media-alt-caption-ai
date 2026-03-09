@@ -92,11 +92,18 @@
 
       #maca-panel {
         width: 100%;
+<<<<<<< HEAD
         max-width: 1100px;
+=======
+        max-width: 1120px;
+>>>>>>> main
         background: #fff;
         border-radius: 16px;
         box-shadow: 0 24px 60px rgba(0,0,0,.30);
         overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100vh - 32px);
       }
 
       #maca-panel header {
@@ -132,18 +139,31 @@
       #maca-panel .body {
         padding: 16px;
         display: grid;
+<<<<<<< HEAD
         grid-template-columns: 280px minmax(0, 1fr);
         gap: 18px;
+=======
+        grid-template-columns: 250px minmax(0, 1fr);
+        gap: 18px;
+        align-items: start;
+        overflow: auto;
+>>>>>>> main
       }
 
       #maca-panel .preview-col {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 10px;
+        position: sticky;
+        top: 0;
       }
       #maca-panel .preview-actions {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
+<<<<<<< HEAD
+=======
+        gap: 8px;
+>>>>>>> main
         margin-top: 0;
       }
       #maca-panel .preview-actions button {
@@ -151,11 +171,26 @@
       }
       #maca-panel .content-col {
         min-width: 0;
+<<<<<<< HEAD
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         column-gap: 16px;
         row-gap: 0;
         align-content: start;
+=======
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #maca-panel .field {
+        min-width: 0;
+      }
+      #maca-panel .field-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1.65fr) minmax(220px, 0.95fr);
+        gap: 16px;
+        align-items: start;
+>>>>>>> main
       }
 
       #maca-panel .preview {
@@ -166,8 +201,13 @@
         display: flex;
         align-items: center;
         justify-content: center;
+<<<<<<< HEAD
         min-height: 220px;
         max-height: 280px;
+=======
+        min-height: 180px;
+        max-height: 220px;
+>>>>>>> main
         position: relative;
       }
 
@@ -275,7 +315,7 @@
         display: block;
         font-size: 12px;
         font-weight: 800;
-        margin-top: 10px;
+        margin-top: 0;
         margin-bottom: 6px;
         color: #111827;
       }
@@ -298,7 +338,11 @@
       /* text fade-in */
       #maca-panel textarea {
         width: 100%;
+<<<<<<< HEAD
         min-height: 86px;
+=======
+        min-height: 74px;
+>>>>>>> main
         resize: vertical;
         padding: 10px 12px;
         border-radius: 12px;
@@ -310,7 +354,11 @@
         transition: opacity 0.25s ease;
       }
       #maca-panel #maca-cap {
+<<<<<<< HEAD
         min-height: 96px;
+=======
+        min-height: 88px;
+>>>>>>> main
       }
       #maca-panel textarea.ready { opacity: 1; }
       #maca-panel textarea[disabled] { background: #f9fafb; color: #6b7280; }
@@ -339,7 +387,7 @@
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
-        margin-top: 12px;
+        margin-top: 0;
       }
       #maca-panel .actions button {
         border-radius: 12px;
@@ -358,9 +406,16 @@
       }
       #maca-panel .copy-actions {
         display: grid;
+<<<<<<< HEAD
         grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
         gap: 10px;
         align-items: stretch;
+=======
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        align-items: stretch;
+        padding-bottom: 4px;
+>>>>>>> main
       }
       #maca-panel .copy-actions button {
         width: 100%;
@@ -426,6 +481,7 @@
 
       @media (max-width: 980px) {
         #maca-panel .body { grid-template-columns: 1fr; }
+<<<<<<< HEAD
         #maca-panel .content-col { grid-template-columns: 1fr; }
         #maca-panel #maca-alt-label,
         #maca-panel #maca-alt,
@@ -433,6 +489,11 @@
         #maca-panel #maca-title {
           grid-column: 1 / -1;
         }
+=======
+        #maca-panel .preview-col { position: static; }
+        #maca-panel .field-row { grid-template-columns: 1fr; }
+        #maca-panel .copy-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+>>>>>>> main
       }
 
       @media (max-width: 680px) {
@@ -1094,15 +1155,25 @@ Leyenda: ${c}`);
               <span class="status-text"></span>
               <span id="maca-seo-pill" class="seo-pill" hidden>SEO: N/A</span>
             </div>
-            <label for="maca-session-context">Contexto de sesión (opcional)</label>
-            <input id="maca-session-context" class="maca-context" type="text" placeholder="Ej: comparativa de SSD PCIe 5.0 para gaming" />
-            <div class="subhelp">Se aplica a esta pestaña para análisis manual, lote y auto-subida.</div>
-            <label for="maca-alt" id="maca-alt-label">ALT</label>
-            <textarea id="maca-alt" placeholder="Generando..." disabled></textarea>
-            <label for="maca-title" id="maca-title-label">Title</label>
-            <textarea id="maca-title" placeholder="Generando..." disabled></textarea>
-            <label for="maca-cap" id="maca-cap-label">Leyenda</label>
-            <textarea id="maca-cap" placeholder="Generando..." disabled></textarea>
+            <div id="maca-top-fields" class="field">
+              <label for="maca-session-context">Contexto de sesión (opcional)</label>
+              <input id="maca-session-context" class="maca-context" type="text" placeholder="Ej: comparativa de SSD PCIe 5.0 para gaming" />
+              <div class="subhelp">Se aplica a esta pestaña para análisis manual, lote y auto-subida.</div>
+            </div>
+            <div id="maca-main-fields" class="field-row">
+              <div id="maca-alt-field" class="field">
+                <label for="maca-alt" id="maca-alt-label">ALT</label>
+                <textarea id="maca-alt" placeholder="Generando..." disabled></textarea>
+              </div>
+              <div id="maca-title-field" class="field">
+                <label for="maca-title" id="maca-title-label">Title</label>
+                <textarea id="maca-title" placeholder="Generando..." disabled></textarea>
+              </div>
+            </div>
+            <div id="maca-cap-field" class="field">
+              <label for="maca-cap" id="maca-cap-label">Leyenda</label>
+              <textarea id="maca-cap" placeholder="Generando..." disabled></textarea>
+            </div>
             <div class="actions copy-actions">
               <button id="maca-copy-alt">Copiar ALT</button>
               <button id="maca-copy-title">Copiar title</button>
@@ -1368,9 +1439,22 @@ Leyenda: ${c}`);
 	      const altLabel = UI.overlay.querySelector("#maca-alt-label");
 	      const titleLabel = UI.overlay.querySelector("#maca-title-label");
 	      const capLabel = UI.overlay.querySelector("#maca-cap-label");
+      const altField = UI.overlay.querySelector("#maca-alt-field");
+      const titleField = UI.overlay.querySelector("#maca-title-field");
+      const capField = UI.overlay.querySelector("#maca-cap-field");
+      const mainFields = UI.overlay.querySelector("#maca-main-fields");
 	      if (altLabel) altLabel.style.display = showAlt ? "" : "none";
 	      if (titleLabel) titleLabel.style.display = showTitle ? "" : "none";
 	      if (capLabel) capLabel.style.display = showCap ? "" : "none";
+      if (altField) altField.style.display = showAlt ? "" : "none";
+      if (titleField) titleField.style.display = showTitle ? "" : "none";
+      if (capField) capField.style.display = showCap ? "" : "none";
+      if (mainFields) {
+        mainFields.style.display = (showAlt || showTitle) ? "grid" : "none";
+        mainFields.style.gridTemplateColumns = (showAlt && showTitle)
+          ? "minmax(0, 1.65fr) minmax(220px, 0.95fr)"
+          : "1fr";
+      }
 
 	      if (UI.altArea) {
         UI.altArea.disabled = !isReady;
