@@ -1,5 +1,8 @@
+/* AUTO-GENERATED FILE. EDIT src/shared/ OR src/platform/*/ INSTEAD. */
 import { DEFAULT_PROMPTS } from "./prompts.js";
 import { normalizeEndpoint } from "./util.js";
+
+const IS_FIREFOX = !!chrome.runtime.getManifest?.()?.browser_specific_settings?.gecko;
 
 const els = {
   language: document.getElementById("language"),
@@ -427,20 +430,20 @@ function updateApiKeyHelpText() {
     return;
   }
   if (provider === "openrouter") {
-    els.apiKeyHelp.textContent = "API key de OpenRouter. Puedes sincronizarla con Chrome si quieres.";
+    els.apiKeyHelp.textContent = "API key de OpenRouter. Puedes sincronizarla si quieres.";
     return;
   }
   if (provider === "anthropic") {
-    els.apiKeyHelp.textContent = "API key de Anthropic. Puedes sincronizarla con Chrome si quieres.";
+    els.apiKeyHelp.textContent = "API key de Anthropic. Puedes sincronizarla si quieres.";
     return;
   }
   if (provider === "groq") {
-    els.apiKeyHelp.textContent = "API key de Groq. Puedes sincronizarla con Chrome si quieres.";
+    els.apiKeyHelp.textContent = "API key de Groq. Puedes sincronizarla si quieres.";
     return;
   }
   const syncOn = !!els.syncApiKey?.checked;
   els.apiKeyHelp.textContent = syncOn
-    ? "La clave se sincroniza con tu cuenta de Chrome."
+    ? "La clave se sincroniza con tu navegador."
     : "La clave se guarda solo en este dispositivo.";
 }
 
@@ -671,7 +674,7 @@ async function updateShortcutInfo() {
 
 els.openShortcuts?.addEventListener("click", () => {
   try {
-    chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
+    chrome.tabs.create({ url: IS_FIREFOX ? "about:addons" : "chrome://extensions/shortcuts" });
   } catch (_) {}
 });
 

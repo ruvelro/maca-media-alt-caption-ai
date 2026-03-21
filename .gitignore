@@ -1,0 +1,8 @@
+dist/
+node_modules/
+web-ext-artifacts/
+.tmp-web-ext/
+.env
+.amo-upload-uuid
+test-results/
+playwright-report/

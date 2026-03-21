@@ -1,4 +1,5 @@
-﻿const HISTORY_PREVIEW_LIMIT = 8;
+/* AUTO-GENERATED FILE. EDIT src/shared/ OR src/platform/*/ INSTEAD. */
+const HISTORY_PREVIEW_LIMIT = 8;
 
 const els = {
   q: document.getElementById("q"),
@@ -259,7 +260,7 @@ async function render() {
   els.empty.hidden = shown.length !== 0;
   if (!els.empty.hidden) {
     els.empty.textContent = (cfg.historyEnabled === false)
-      ? "El historial esta desactivado en Ajustes."
+      ? "El historial está desactivado en Ajustes."
       : "No hay elementos en el historial.";
   }
 
@@ -302,7 +303,7 @@ els.quickEnabled?.addEventListener("change", async () => {
   const on = !!els.quickEnabled.checked;
   quickState.extensionEnabled = on;
   await saveQuickPatch({ extensionEnabled: on });
-  toast(on ? "Extension activada" : "Extension desactivada");
+  toast(on ? "Extensión activada" : "Extensión desactivada");
 });
 
 els.quickUseSignature?.addEventListener("change", async () => {
@@ -331,4 +332,3 @@ els.quickSignaturePreset?.addEventListener("change", async () => {
 });
 
 render().catch(() => {});
-

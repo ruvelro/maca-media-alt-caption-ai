@@ -1,9 +1,13 @@
+/* AUTO-GENERATED FILE. EDIT src/shared/ OR src/platform/*/ INSTEAD. */
 ﻿// overlay.js - maca floating overlay (universal)
 // Fixes: spinner always visible (even if result arrives instantly), copy feedback always shown.
 // Safe reinjection: overwrites styles + replaces message listener.
 // WP fix: avoid class name collision with wp-admin ".spinner" by using ".maca-spinner".
 
 (function () {
+  const WP_DOM = window.__MACA_WP_DOM || {};
+  const WP_SELECTORS_SHARED = window.__MACA_WP_SELECTORS || {};
+  const WP_MEDIA = window.__MACA_WP_MEDIA || {};
   const STYLE_ID = "maca-overlay-styles";
   const FEEDBACK_MS = 900;
   const MIN_LOADING_MS = 350; // ensures at least a visible loading phase (especially in WordPress)
@@ -593,142 +597,26 @@
   // Attempt to fill WordPress fields (ALT + Caption) when the Media modal or Attachment details screen is open.
   // Safe no-op outside of WP or when fields are not present.
   const WP_SELECTORS = {
-    alt: [
-      // Media modal (library / insert media)
-      '.media-modal .attachment-details .setting[data-setting="alt"] textarea',
-      '.media-modal .attachment-details .setting[data-setting="alt"] input',
-      '.media-modal [data-setting="alt"] textarea',
-      '.media-modal [data-setting="alt"] input',
-      // Attachment details panel outside modal (varies by WP)
-      '.attachment-details .setting[data-setting="alt"] textarea',
-      '.attachment-details .setting[data-setting="alt"] input',
-      '.attachment-details [data-setting="alt"] textarea',
-      '.attachment-details [data-setting="alt"] input',
-      // Classic attachment edit screen
-      '#attachment_alt',
-      'textarea.attachment-alt-text',
-      'input.attachment-alt-text',
-      // Generic / translated labels (Attachment details screen)
-      'textarea[aria-label="Texto alternativo"]',
-      'input[aria-label="Texto alternativo"]',
-      'textarea[aria-label="Alt text"]',
-      'input[aria-label="Alt text"]',
-      // Fallbacks (rare)
-      'input[name="attachment[alt]"]',
-      'textarea[name="attachment[alt]"]'
-    ].join(','),
-    caption: [
-      // Media modal (library / insert media)
-      '.media-modal .attachment-details .setting[data-setting="caption"] textarea',
-      '.media-modal .attachment-details .setting[data-setting="caption"] input',
-      '.media-modal .attachment-details .setting[data-setting="caption"] [contenteditable="true"]',
-      '.media-modal [data-setting="caption"] textarea',
-      '.media-modal [data-setting="caption"] input',
-      '.media-modal [data-setting="caption"] [contenteditable="true"]',
-      // Attachment details panel outside modal (varies by WP)
-      '.attachment-details .setting[data-setting="caption"] textarea',
-      '.attachment-details .setting[data-setting="caption"] input',
-      '.attachment-details .setting[data-setting="caption"] [contenteditable="true"]',
-      '.attachment-details [data-setting="caption"] textarea',
-      '.attachment-details [data-setting="caption"] input',
-      '.attachment-details [data-setting="caption"] [contenteditable="true"]',
-      // Classic attachment edit screen
-      '#attachment_caption',
-      'textarea.attachment-caption',
-      'input.attachment-caption',
-      // Generic / translated labels (Attachment details screen)
-      'textarea[aria-label="Leyenda"]',
-      'input[aria-label="Leyenda"]',
-      'textarea[aria-label="Caption"]',
-      'input[aria-label="Caption"]',
-      'textarea[name="attachment[caption]"]',
-      'input[name="attachment[caption]"]'
-    ].join(','),
-    title: [
-      '.media-modal .attachment-details .setting[data-setting="title"] textarea',
-      '.media-modal .attachment-details .setting[data-setting="title"] input',
-      '.media-modal [data-setting="title"] textarea',
-      '.media-modal [data-setting="title"] input',
-      '.attachment-details .setting[data-setting="title"] textarea',
-      '.attachment-details .setting[data-setting="title"] input',
-      '.attachment-details [data-setting="title"] textarea',
-      '.attachment-details [data-setting="title"] input',
-      '#attachment_title',
-      'textarea.attachment-title',
-      'input.attachment-title',
-      'textarea[aria-label="Título"]',
-      'input[aria-label="Título"]',
-      'textarea[aria-label="Title"]',
-      'input[aria-label="Title"]',
-      'input[name="attachment[title]"]',
-      'textarea[name="attachment[title]"]'
-    ].join(',')
+    alt: WP_SELECTORS_SHARED.getFieldSelector?.("alt") || "",
+    caption: WP_SELECTORS_SHARED.getFieldSelector?.("caption") || "",
+    title: WP_SELECTORS_SHARED.getFieldSelector?.("title") || ""
   };
 
 
-  function isVisibleElement(el) {
-    if (!el) return false;
-    // offsetParent null for display:none; also check visibility.
-    const style = window.getComputedStyle(el);
-    if (!style) return false;
-    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
-    // If it's in a hidden media modal, WP sometimes sets aria-hidden
-    const modal = el.closest && el.closest(".media-modal");
-    if (modal && modal.getAttribute && modal.getAttribute("aria-hidden") === "true") return false;
-    return true;
-  }
+  const isVisibleElement = (el) => !!WP_DOM.isVisibleField?.(el);
 
   function pickBestField(selector) {
-    const els = Array.from(document.querySelectorAll(selector));
-    // Prefer visible elements first
-    for (const el of els) {
-      if (isVisibleElement(el)) return el;
-    }
-    return els[0] || null;
-  }
-
-  
-  function normText(t) {
-    return String(t || "").replace(/\s+/g, " ").trim().toLowerCase();
+    return WP_DOM.pickBestField?.(selector, document) || null;
   }
 
   function findFieldNearLabel(labelTexts) {
-    const targets = Array.isArray(labelTexts) ? labelTexts : [labelTexts];
-    const wanted = targets.map(normText);
-    // Search likely containers first (media modal + attachment details panels)
     const roots = [
       document.querySelector(".media-modal"),
       document.querySelector(".media-frame"),
       document.querySelector(".attachment-details"),
       document.body
     ].filter(Boolean);
-
-    for (const root of roots) {
-      // Look for <label>, <span>, or <div> used as field names in WP media UI
-      const nodes = root.querySelectorAll("label, .setting .name, .media-setting .name, .attachment-details label, .attachment-details .name, .compat-item label, .compat-item .label");
-      for (const n of nodes) {
-        const txt = normText(n.textContent);
-        if (!txt) continue;
-        if (!wanted.includes(txt)) continue;
-
-        // Try associated control by for/id
-        if (n.tagName === "LABEL") {
-          const forId = n.getAttribute("for");
-          if (forId) {
-            const el = root.querySelector(`#${CSS.escape(forId)}`);
-            if (el && isVisibleElement(el)) return el;
-          }
-        }
-
-        // Otherwise search within the same row/container
-        const row = n.closest(".setting, .media-setting, .compat-field, .compat-item, tr, .field, .components-base-control") || n.parentElement;
-        if (row) {
-          const el = row.querySelector('textarea, input, [contenteditable="true"]');
-          if (el && isVisibleElement(el)) return el;
-        }
-      }
-    }
-    return null;
+    return WP_DOM.findFieldNearLabel?.(labelTexts, roots) || null;
   }
 
   function getAltField() {
@@ -736,7 +624,7 @@
   }
 
   function getCaptionField() {
-    return pickBestField(WP_SELECTORS.caption) || findFieldNearLabel(["leyenda", "caption", "descripción", "descripcion"]);
+    return pickBestField(WP_SELECTORS.caption) || findFieldNearLabel(["leyenda", "caption"]);
   }
 
   function getTitleField() {
@@ -767,21 +655,7 @@ function isMediaModalOpen() {
   }
 
   function setFormValue(el, value) {
-    try {
-      // Handle contenteditable just in case
-      if (el && el.getAttribute && el.getAttribute("contenteditable") === "true") {
-        el.textContent = value;
-      } else {
-        el.value = value;
-      }
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      // Some WP views listen to key events
-      el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: " " }));
-      return true;
-    } catch (_) {
-      return false;
-    }
+    return !!WP_DOM.setWpFormValue?.(el, value);
   }
 
   function applyToWordPressFields({ alt, title, leyenda }) {
@@ -862,38 +736,8 @@ async function copyText(text, btn, label) {
   }
 
 
-function isWpAdminPage() {
-  try {
-    return /\/wp-admin\//.test(location.pathname || "");
-  } catch (_) {
-    return false;
-  }
-}
-
-function pickMainWpAttachmentsList(root) {
-  const browser = root.querySelector(".attachments-browser") || root;
-  const lists = Array.from(browser.querySelectorAll("ul.attachments"));
-  // Prefer the main grid list (not inside the selection tray)
-  for (const ul of lists) {
-    if (ul.closest(".media-selection")) continue; // selection tray
-    if (ul.closest(".attachments-browser")) return ul;
-  }
-  // Fallback: any attachments list not in media-selection
-  for (const ul of lists) {
-    if (ul.closest(".media-selection")) continue;
-    return ul;
-  }
-  return null;
-}
-
 function getWpSelectedCount() {
-  if (!isWpAdminPage()) return 0;
-  const root = document.querySelector(".media-modal") || document.querySelector(".media-frame") || document;
-  const list = pickMainWpAttachmentsList(root) || root;
-  const selected = list.querySelectorAll(
-    "li.attachment[aria-checked='true'], li.attachment[aria-selected='true'], li.attachment.selected"
-  );
-  return selected ? selected.length : 0;
+  return WP_MEDIA.getWpSelectedCount?.(document) || 0;
 }
 
 function updateBatchButtonUi() {
@@ -905,7 +749,7 @@ function updateBatchButtonUi() {
     return;
   }
   const n = getWpSelectedCount();
-  const show = isWpAdminPage() && n > 1;
+  const show = !!WP_MEDIA.isWpAdminPage?.() && n > 1;
   UI.batchBtn.style.display = show ? "" : "none";
   UI.batchBtn.disabled = !show;
   UI.batchBtn.textContent = show ? `Procesar selección (${n})` : "Procesar selección";

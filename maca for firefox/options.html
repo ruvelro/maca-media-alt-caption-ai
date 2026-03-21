@@ -1,3 +1,4 @@
+<!-- AUTO-GENERATED FILE. EDIT src/shared/ OR src/platform/*/ INSTEAD. -->
 ﻿<!doctype html>
 <html lang="es">
 <head>
@@ -108,7 +109,7 @@
       <div class="field" id="syncApiKeyRow" style="margin-top:10px;">
         <label style="display:flex; gap:10px; align-items:center;">
           <input type="checkbox" id="syncApiKey" style="width:auto; margin:0;" />
-          Sincronizar API key con Firefox Sync
+          Sincronizar API key con la sincronizacion del navegador
         </label>
         <div class="help">Si lo desactivas, la API key se guarda solo en este dispositivo. Recomendado para más privacidad.</div>
       </div>
@@ -202,7 +203,7 @@
       </label>
       <div class="help">
         Permite ejecutar maca sin botón derecho. Se intentará detectar la imagen seleccionada/abierta en la Biblioteca de medios o en Detalles de la imagen.
-        El atajo se configura desde <b>Firefox → about:addons → Gestionar atajos de extensiones</b>.
+        El atajo se configura desde la gestion de atajos de extensiones del navegador.
       </div>
       <div class="row" style="margin-top:8px; align-items:center;">
         <div class="field" style="margin:0;">
@@ -392,7 +393,7 @@
           <option value="50">50</option>
           <option value="0">Ilimitado</option>
         </select>
-        <div class="help">"Ilimitado" guardará hasta que Firefox alcance su cuota de almacenamiento.</div>
+        <div class="help">"Ilimitado" guardara hasta que el navegador alcance su cuota de almacenamiento.</div>
       </div>
 
           <div class="field" style="margin-top:10px;">
@@ -446,7 +447,7 @@
         <b>maca</b> funciona de forma local en tu navegador. No usamos analítica ni tracking.
       </p>
       <ul>
-        <li><b>API key:</b> se guarda en tu navegador. Si activas "Sincronizar API key con Firefox Sync", se guardará en <code>chrome.storage.sync</code> y se sincronizará con tu perfil de Firefox.</li>
+        <li><b>API key:</b> se guarda en tu navegador. Si activas la sincronizacion, se guardara en <code>chrome.storage.sync</code> y se sincronizara con tu perfil del navegador.</li>
         <li><b>Imágenes:</b> para generar el ALT/leyenda, la imagen (o una versión reducida) se envía al proveedor que elijas (OpenAI/Gemini o tu endpoint local). No se envían cookies ni credenciales.</li>
         <li><b>Historial:</b> se guarda en tu dispositivo (y puedes desactivarlo o vaciarlo cuando quieras).</li>
         <li><b>Modo debug:</b> guarda eventos recientes para diagnóstico y nunca incluye tu API key.</li>

@@ -1,8 +1,12 @@
+/* AUTO-GENERATED FILE. EDIT src/shared/ OR src/platform/*/ INSTEAD. */
 // context_helper.js - captures the last right-click target and extracts an image URL.
 // Also supports fetching the currently selected/open media item in WordPress Media Library.
 // Loaded only on wp-admin pages via content_scripts.
 
 (() => {
+  const WP_DOM = window.__MACA_WP_DOM || {};
+  const WP_SELECTORS_SHARED = window.__MACA_WP_SELECTORS || {};
+  const WP_MEDIA = window.__MACA_WP_MEDIA || {};
   const STATE = { last: null, lastAt: 0 };
   const MAX_AGE_MS = 120000; // 2 minutes
   const AUTO_UPLOAD = {
@@ -18,7 +22,10 @@
     autoAnalyzeOnSelectMedia: false,
     autoQueueModeVisible: true
   };
-  let LAST_USER_SELECT_AT = 0;
+  const LAST_EXPLICIT_SELECTION = {
+    id: "",
+    at: 0
+  };
   const AUTO_PROGRESS = {
     uiVisible: false,
     hideTimer: null
@@ -263,44 +270,15 @@
   }
 
   function getWpSelectedAttachmentEl() {
-    const selectedAll = getWpSelectedAttachmentEls();
-    if (!selectedAll.length) return null;
-    if (selectedAll.length === 1) return selectedAll[0];
-
-    const focused =
-      selectedAll.find(el => el.getAttribute("tabindex") === "0") ||
-      selectedAll.find(el => el.classList.contains("details")) ||
-      selectedAll[selectedAll.length - 1];
-
-    return focused || selectedAll[selectedAll.length - 1] || null;
+    return WP_MEDIA.getWpSelectedAttachmentEl?.(document) || null;
   }
 
   function getWpSelectedAttachmentEls() {
-    const root =
-      document.querySelector(".media-modal") ||
-      document.querySelector(".media-frame") ||
-      document;
-
-    const browser = root.querySelector(".attachments-browser") || root;
-
-    // Prefer explicit selected tray items when available (most reliable for multi-select).
-    const trayItems = Array.from(browser.querySelectorAll(".media-selection .attachments .attachment[data-id]"));
-    if (trayItems.length) return trayItems;
-
-    const list = pickMainAttachmentsList(browser);
-    const els = Array.from(list.querySelectorAll(
-      "li.attachment[aria-checked='true'], li.attachment.selected"
-    ));
-    return els;
+    return WP_MEDIA.getWpSelectedAttachmentEls?.(document) || [];
   }
 
   function pickMainAttachmentsList(browser) {
-    const lists = Array.from(browser.querySelectorAll("ul.attachments"));
-    for (const ul of lists) {
-      if (ul.closest(".media-selection")) continue;
-      return ul;
-    }
-    return browser.querySelector("ul.attachments") || browser.querySelector(".attachments") || browser;
+    return WP_MEDIA.pickMainWpAttachmentsList?.(browser) || browser.querySelector("ul.attachments") || browser.querySelector(".attachments") || browser;
   }
 
   function extractCandidateFromAttachmentEl(attEl) {
@@ -331,17 +309,25 @@
     return null;
   }
 
+  function getAttachmentIdFromEl(el) {
+    const att = el?.closest?.("li.attachment[data-id]") || el;
+    return String(att?.getAttribute?.("data-id") || att?.dataset?.id || "");
+  }
+
+  function noteExplicitSelection(target) {
+    const id = getAttachmentIdFromEl(target);
+    if (!id) return false;
+    LAST_EXPLICIT_SELECTION.id = id;
+    LAST_EXPLICIT_SELECTION.at = Date.now();
+    return true;
+  }
+
+  function wasExplicitlySelectedNow(id, windowMs = 3000) {
+    return !!id && LAST_EXPLICIT_SELECTION.id === String(id) && (Date.now() - Number(LAST_EXPLICIT_SELECTION.at || 0)) < windowMs;
+  }
+
   function setFormValue(el, value) {
-    if (!el) return false;
-    try {
-      el.focus();
-      el.value = value;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      return true;
-    } catch (_) {
-      return false;
-    }
+    return !!WP_DOM.setWpFormValue?.(el, value);
   }
 
   function clickAttachmentById(id) {
@@ -368,6 +354,15 @@
     if (!selected) return false;
     el.click();
     return true;
+  }
+
+  function isAttachmentSelectedById(id) {
+    const scope =
+      document.querySelector(".media-modal") ||
+      document.querySelector(".media-frame") ||
+      document;
+    const el = scope.querySelector(`.attachments .attachment[data-id="${CSS.escape(String(id))}"]`);
+    return !!el?.matches?.("li.attachment[aria-checked='true'], li.attachment[aria-selected='true'], li.attachment.selected");
   }
 
   function ensureAutoProgressUi() {
@@ -586,33 +581,10 @@
     }
   }
 
-  function isVisibleField(el) {
-    if (!el) return false;
-    try {
-      const st = getComputedStyle(el);
-      if (!st) return false;
-      if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") return false;
-      const modal = el.closest?.(".media-modal");
-      if (modal && modal.getAttribute?.("aria-hidden") === "true") return false;
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
+  const isVisibleField = (el) => !!WP_DOM.isVisibleField?.(el);
 
   function pickFieldFromSelectors(scope, details, selectors) {
-    const roots = [details, scope, document].filter(Boolean);
-    for (const root of roots) {
-      for (const sel of selectors) {
-        try {
-          const all = Array.from(root.querySelectorAll(sel));
-          const visible = all.find(isVisibleField);
-          if (visible) return visible;
-          if (all[0]) return all[0];
-        } catch (_) {}
-      }
-    }
-    return null;
+    return WP_DOM.pickFieldFromSelectors?.([details, scope, document], selectors) || null;
   }
 
   function getAltFieldForAttachment(id) {
@@ -620,25 +592,7 @@
     const details =
       scope.querySelector(".attachment-details") ||
       document.querySelector(".attachment-details");
-    const selectors = [
-      '.attachment-details .setting[data-setting="alt"] textarea',
-      '.attachment-details .setting[data-setting="alt"] input',
-      '.attachment-details [data-setting="alt"] textarea',
-      '.attachment-details [data-setting="alt"] input',
-      '.media-modal .attachment-details .setting[data-setting="alt"] textarea',
-      '.media-modal .attachment-details .setting[data-setting="alt"] input',
-      '.media-modal [data-setting="alt"] textarea',
-      '.media-modal [data-setting="alt"] input',
-      "#attachment_alt",
-      "textarea.attachment-alt-text",
-      "input.attachment-alt-text",
-      `textarea[name="attachments[${id}][alt]"]`,
-      `input[name="attachments[${id}][alt]"]`,
-      'textarea[aria-label="Texto alternativo"]',
-      'input[aria-label="Texto alternativo"]',
-      'textarea[aria-label="Alt text"]',
-      'input[aria-label="Alt text"]'
-    ];
+    const selectors = WP_SELECTORS_SHARED.getAttachmentFieldSelectors?.(id, "alt") || [];
     return pickFieldFromSelectors(scope, details, selectors);
   }
 
@@ -647,26 +601,34 @@
     const details =
       scope.querySelector(".attachment-details") ||
       document.querySelector(".attachment-details");
-    const selectors = [
-      '.attachment-details .setting[data-setting="caption"] textarea',
-      '.attachment-details .setting[data-setting="caption"] input',
-      '.attachment-details [data-setting="caption"] textarea',
-      '.attachment-details [data-setting="caption"] input',
-      '.media-modal .attachment-details .setting[data-setting="caption"] textarea',
-      '.media-modal .attachment-details .setting[data-setting="caption"] input',
-      '.media-modal [data-setting="caption"] textarea',
-      '.media-modal [data-setting="caption"] input',
-      "#attachment_caption",
-      "textarea.attachment-caption",
-      "input.attachment-caption",
-      `textarea[name="attachments[${id}][caption]"]`,
-      `input[name="attachments[${id}][caption]"]`,
-      'textarea[aria-label="Leyenda"]',
-      'input[aria-label="Leyenda"]',
-      'textarea[aria-label="Caption"]',
-      'input[aria-label="Caption"]'
-    ];
+    const selectors = WP_SELECTORS_SHARED.getAttachmentFieldSelectors?.(id, "caption") || [];
     return pickFieldFromSelectors(scope, details, selectors);
+  }
+
+  function getRequiredAttachmentFields(mode) {
+    if (mode === "caption") return ["leyenda"];
+    if (mode === "alt") return ["alt", "title"];
+    return ["alt", "title", "leyenda"];
+  }
+
+  function getAttachmentFieldByKey(id, key) {
+    if (key === "alt") return getAltFieldForAttachment(id);
+    if (key === "title") return getTitleFieldForAttachment(id);
+    if (key === "leyenda") return getCaptionFieldForAttachment(id);
+    return null;
+  }
+
+  async function waitForAttachmentFields(id, mode, timeoutMs = 3500) {
+    clickAttachmentById(id);
+    const required = getRequiredAttachmentFields(mode);
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const selected = isAttachmentSelectedById(id);
+      const ready = required.every((key) => !!getAttachmentFieldByKey(id, key));
+      if ((selected || !clickAttachmentById(id)) && ready) return true;
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    return false;
   }
 
   function getTitleFieldForAttachment(id) {
@@ -674,29 +636,14 @@
     const details =
       scope.querySelector(".attachment-details") ||
       document.querySelector(".attachment-details");
-    const selectors = [
-      "#attachment_title",
-      "input.attachment-title",
-      "textarea.attachment-title",
-      '.attachment-details .setting[data-setting="title"] input',
-      '.attachment-details .setting[data-setting="title"] textarea',
-      '.attachment-details [data-setting="title"] input',
-      '.attachment-details [data-setting="title"] textarea',
-      `.setting[data-setting="title"] input`,
-      `.setting[data-setting="title"] textarea`,
-      `input[name="attachments[${id}][title]"]`,
-      `textarea[name="attachments[${id}][title]"]`,
-      'input[aria-label="Título"]',
-      'textarea[aria-label="Título"]',
-      'input[aria-label="Title"]',
-      'textarea[aria-label="Title"]'
-    ];
+    const selectors = WP_SELECTORS_SHARED.getAttachmentFieldSelectors?.(id, "title") || [];
     return pickFieldFromSelectors(scope, details, selectors);
   }
 
   async function applyToAttachment({ attachmentId, alt, title, leyenda, generateMode, requireMedia }) {
     const id = String(attachmentId || "");
     if (!id) return { ok: false, error: "ID de adjunto inválido." };
+    const mode = String(generateMode || "both");
 
     // If requireMedia is on, only run inside media modal/frame or details screen.
     if (requireMedia) {
@@ -704,31 +651,37 @@
       if (!inMedia) return { ok: false, error: "No se detecta pantalla de Medios/Detalles." };
     }
 
-    clickAttachmentById(id);
-
-    // Wait briefly for the details panel to update
-    const start = Date.now();
-    while (Date.now() - start < 3500) {
-      const altEl = getAltFieldForAttachment(id);
-      const titleEl = getTitleFieldForAttachment(id);
-      const capEl = getCaptionFieldForAttachment(id);
-      if (altEl || titleEl || capEl) break;
-      await new Promise(r => setTimeout(r, 80));
-    }
+    await waitForAttachmentFields(id, mode, 3500);
 
     const res = { alt: false, title: false, leyenda: false };
-    const mode = String(generateMode || "both");
+    const missing = [];
     if (mode === "both" || mode === "alt") {
       const altEl = getAltFieldForAttachment(id);
       if (altEl) res.alt = setFormValue(altEl, String(alt || ""));
+      else missing.push("alt");
       const titleEl = getTitleFieldForAttachment(id);
       if (titleEl) res.title = setFormValue(titleEl, String(title || alt || ""));
+      else missing.push("title");
     }
     if (mode === "both" || mode === "caption") {
       const capEl = getCaptionFieldForAttachment(id);
       if (capEl) res.leyenda = setFormValue(capEl, String(leyenda || ""));
+      else missing.push("leyenda");
     }
-    return { ok: true, applied: res };
+
+    for (const key of getRequiredAttachmentFields(mode)) {
+      if (!res[key] && !missing.includes(key)) missing.push(key);
+    }
+
+    const ok = missing.length === 0;
+    return ok
+      ? { ok: true, applied: res, missing: [] }
+      : {
+          ok: false,
+          applied: res,
+          missing,
+          error: `No se pudieron aplicar todos los campos requeridos (${missing.join(", ")}).`
+        };
   }
 
   function findWpDetailsCandidate() {
@@ -850,8 +803,7 @@
       const isMultiUpload = countRecentUploadMarked() >= 2;
       const inUploadSession = hasRecentUploadSignal() && Number(AUTO_UPLOAD.uploadSessionStartAt || 0) > 0;
       const allowBatchUploadFlow = fromUpload && isMultiUpload && inUploadSession;
-      const userJustSelected = (Date.now() - LAST_USER_SELECT_AT) < 3000;
-      const allowSelectFeature = AUTO_UPLOAD_SETTINGS.autoAnalyzeOnSelectMedia && selected && userJustSelected;
+      const allowSelectFeature = AUTO_UPLOAD_SETTINGS.autoAnalyzeOnSelectMedia && selected && wasExplicitlySelectedNow(id);
 
       // Default behavior: only auto-run for multi-upload sessions.
       // Optional feature: auto-run on manual selection in media library.
@@ -989,14 +941,14 @@
         const target = ev?.target;
         const onAttachment = !!target?.closest?.("li.attachment[data-id]");
         if (!onAttachment) return;
-        LAST_USER_SELECT_AT = Date.now();
+        if (!noteExplicitSelection(target)) return;
         setTimeout(scanSelected, 50);
       }, true);
       root.addEventListener("keyup", (ev) => {
         const target = ev?.target;
         const inAttachment = !!target?.closest?.("li.attachment[data-id]");
         if (!inAttachment) return;
-        LAST_USER_SELECT_AT = Date.now();
+        if (!noteExplicitSelection(target)) return;
         setTimeout(scanSelected, 50);
       }, true);
 

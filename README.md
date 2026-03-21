@@ -289,7 +289,7 @@ Consulta:
 
 Versión actual del proyecto:
 
-- `1.0.7`
+- `1.0.8`
 
 Incluye, entre otras cosas:
 

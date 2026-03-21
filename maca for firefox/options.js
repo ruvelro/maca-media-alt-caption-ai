@@ -1,5 +1,8 @@
-﻿import { DEFAULT_PROMPTS } from "./prompts.js";
+/* AUTO-GENERATED FILE. EDIT src/shared/ OR src/platform/*/ INSTEAD. */
+import { DEFAULT_PROMPTS } from "./prompts.js";
 import { normalizeEndpoint } from "./util.js";
+
+const IS_FIREFOX = !!chrome.runtime.getManifest?.()?.browser_specific_settings?.gecko;
 
 const els = {
   language: document.getElementById("language"),
@@ -96,14 +99,14 @@ function setStatus(msg, { timeoutMs = 2500 } = {}) {
 }
 
 
-// Debug (diagnÃ³stico)
+// Debug (diagnóstico)
 els.copyDebug?.addEventListener("click", async () => {
   const { debugLog = [] } = await chrome.storage.local.get({ debugLog: [] });
   try {
     await navigator.clipboard.writeText(JSON.stringify(debugLog, null, 2));
-    setStatus("DiagnÃ³stico copiado al portapapeles.");
+    setStatus("Diagnóstico copiado al portapapeles.");
   } catch (_) {
-    setStatus("No se pudo copiar el diagnÃ³stico.");
+    setStatus("No se pudo copiar el diagnóstico.");
   }
 });
 
@@ -140,7 +143,7 @@ els.copySupport?.addEventListener("click", async () => {
 
 els.clearDebug?.addEventListener("click", async () => {
   await chrome.storage.local.set({ debugLog: [] });
-  setStatus("DiagnÃ³stico borrado.");
+  setStatus("Diagnóstico borrado.");
 });
 
 async function renderMetricsSummary() {
@@ -149,7 +152,7 @@ async function renderMetricsSummary() {
   const total = metrics?.total || {};
   const lines = [];
   lines.push(`Total llamadas: ${Number(total.calls || 0)}`);
-  lines.push(`Total OK: ${Number(total.ok || 0)} Â· Error: ${Number(total.error || 0)}`);
+  lines.push(`Total OK: ${Number(total.ok || 0)} · Error: ${Number(total.error || 0)}`);
   lines.push(`Tiempo medio: ${Number(total.calls || 0) > 0 ? Math.round(Number(total.totalMs || 0) / Number(total.calls || 1)) : 0} ms`);
   if (metrics?.updatedAt) lines.push(`Actualizado: ${metrics.updatedAt}`);
   lines.push("");
@@ -170,16 +173,16 @@ els.copyMetrics?.addEventListener("click", async () => {
   const { metrics = {} } = await chrome.storage.local.get({ metrics: {} });
   try {
     await navigator.clipboard.writeText(JSON.stringify(metrics, null, 2));
-    setStatus("MÃ©tricas copiadas.");
+    setStatus("Métricas copiadas.");
   } catch (_) {
-    setStatus("No se pudieron copiar las mÃ©tricas.");
+    setStatus("No se pudieron copiar las métricas.");
   }
 });
 
 els.clearMetrics?.addEventListener("click", async () => {
   await chrome.storage.local.set({ metrics: {} });
   await renderMetricsSummary();
-  setStatus("MÃ©tricas borradas.");
+  setStatus("Métricas borradas.");
 });
 
 
@@ -329,7 +332,7 @@ function renderSignatureUi() {
   for (const it of list) {
     const opt = document.createElement("option");
     opt.value = it.id;
-    opt.textContent = `${it.name}${it.text ? "" : " (vacÃ­a)"}`;
+    opt.textContent = `${it.name}${it.text ? "" : " (vacía)"}`;
     if (it.id === active.id) opt.selected = true;
     els.captionSignaturePreset.appendChild(opt);
   }
@@ -357,23 +360,23 @@ function applyProviderUi(provider, cfg = {}) {
       if (els.apiKeyLabel) els.apiKeyLabel.textContent = "API key (opcional)";
       if (els.apiKeyHelp)
         els.apiKeyHelp.textContent =
-          "Solo si tu servidor local requiere autenticaciÃ³n (normalmente se deja vacÃ­o).";
+          "Solo si tu servidor local requiere autenticación (normalmente se deja vacío).";
       if (els.apiKey) els.apiKey.placeholder = "(opcional)";
     } else if (provider === "openrouter") {
       if (els.apiKeyLabel) els.apiKeyLabel.textContent = "API key (OpenRouter)";
       if (els.apiKeyHelp) els.apiKeyHelp.textContent = "Usa una API key de OpenRouter.";
-      if (els.apiKey) els.apiKey.placeholder = "Pega aquÃ­ tu API key de OpenRouter";
+      if (els.apiKey) els.apiKey.placeholder = "Pega aquí tu API key de OpenRouter";
     } else if (provider === "anthropic") {
       if (els.apiKeyLabel) els.apiKeyLabel.textContent = "API key (Anthropic)";
       if (els.apiKeyHelp) els.apiKeyHelp.textContent = "Usa una API key de Anthropic.";
-      if (els.apiKey) els.apiKey.placeholder = "Pega aquÃ­ tu API key de Anthropic";
+      if (els.apiKey) els.apiKey.placeholder = "Pega aquí tu API key de Anthropic";
     } else if (provider === "groq") {
       if (els.apiKeyLabel) els.apiKeyLabel.textContent = "API key (Groq)";
       if (els.apiKeyHelp) els.apiKeyHelp.textContent = "Usa una API key de Groq.";
-      if (els.apiKey) els.apiKey.placeholder = "Pega aquÃ­ tu API key de Groq";
+      if (els.apiKey) els.apiKey.placeholder = "Pega aquí tu API key de Groq";
     } else {
       if (els.apiKeyLabel) els.apiKeyLabel.textContent = "API key";
-      if (els.apiKey) els.apiKey.placeholder = "Pega aquÃ­ tu API key";
+      if (els.apiKey) els.apiKey.placeholder = "Pega aquí tu API key";
     }
   }
 
@@ -419,7 +422,7 @@ function updateApiKeyHelpText() {
   const provider = els.provider?.value || "openai";
   if (provider === "local_openai") {
     els.apiKeyHelp.textContent =
-      "Solo si tu servidor local requiere autenticaciÃ³n (normalmente se deja vacÃ­o).";
+      "Solo si tu servidor local requiere autenticación (normalmente se deja vacío).";
     return;
   }
   if (provider === "local_ollama") {
@@ -427,20 +430,20 @@ function updateApiKeyHelpText() {
     return;
   }
   if (provider === "openrouter") {
-    els.apiKeyHelp.textContent = "API key de OpenRouter. Puedes sincronizarla con Firefox si quieres.";
+    els.apiKeyHelp.textContent = "API key de OpenRouter. Puedes sincronizarla si quieres.";
     return;
   }
   if (provider === "anthropic") {
-    els.apiKeyHelp.textContent = "API key de Anthropic. Puedes sincronizarla con Firefox si quieres.";
+    els.apiKeyHelp.textContent = "API key de Anthropic. Puedes sincronizarla si quieres.";
     return;
   }
   if (provider === "groq") {
-    els.apiKeyHelp.textContent = "API key de Groq. Puedes sincronizarla con Firefox si quieres.";
+    els.apiKeyHelp.textContent = "API key de Groq. Puedes sincronizarla si quieres.";
     return;
   }
   const syncOn = !!els.syncApiKey?.checked;
   els.apiKeyHelp.textContent = syncOn
-    ? "La clave se sincroniza con tu cuenta de Firefox."
+    ? "La clave se sincroniza con tu navegador."
     : "La clave se guarda solo en este dispositivo.";
 }
 
@@ -665,13 +668,13 @@ async function updateShortcutInfo() {
       els.shortcutCurrent.textContent = cmd?.shortcut ? cmd.shortcut : "Sin asignar";
     });
   } catch (_) {
-    els.shortcutCurrent.textContent = "-";
+    els.shortcutCurrent.textContent = "—";
   }
 }
 
 els.openShortcuts?.addEventListener("click", () => {
   try {
-    chrome.tabs.create({ url: "about:addons" });
+    chrome.tabs.create({ url: IS_FIREFOX ? "about:addons" : "chrome://extensions/shortcuts" });
   } catch (_) {}
 });
 
@@ -767,24 +770,24 @@ els.save.addEventListener("click", async () => {
     await pRemove("sync", ["apiKey"]);
   }
 
-  els.status.textContent = "âœ” ConfiguraciÃ³n guardada";
+  els.status.textContent = "✔ Configuración guardada";
   setTimeout(() => (els.status.textContent = ""), 2000);
 });
 
 // Tools
 els.testConfig?.addEventListener("click", async () => {
-  els.status.textContent = "Probando configuraciÃ³n...";
+  els.status.textContent = "Probando configuración...";
   els.testConfig.disabled = true;
   try {
     const res = await chrome.runtime.sendMessage({ type: "MACA_TEST_CONFIG" });
     if (res?.ok) {
-      const warn = Array.isArray(res.warnings) && res.warnings.length ? `  Â·  Avisos: ${res.warnings.join(" | ")}` : "";
-      els.status.textContent = `âœ” OK (${res.provider}${res.model ? ` Â· ${res.model}` : ""})${warn}`;
+      const warn = Array.isArray(res.warnings) && res.warnings.length ? `  ·  Avisos: ${res.warnings.join(" | ")}` : "";
+      els.status.textContent = `✔ OK (${res.provider}${res.model ? ` · ${res.model}` : ""})${warn}`;
     } else {
-      els.status.textContent = `âœ– ${res?.error || "Error al probar la configuraciÃ³n"}`;
+      els.status.textContent = `✖ ${res?.error || "Error al probar la configuración"}`;
     }
   } catch (e) {
-    els.status.textContent = `âœ– ${e?.message || String(e)}`;
+    els.status.textContent = `✖ ${e?.message || String(e)}`;
   } finally {
     setTimeout(() => (els.status.textContent = ""), 6000);
     els.testConfig.disabled = false;
@@ -792,9 +795,9 @@ els.testConfig?.addEventListener("click", async () => {
 });
 
 els.clearHistory?.addEventListener("click", () => {
-  if (!confirm("Â¿Vaciar el historial guardado por maca?")) return;
+  if (!confirm("¿Vaciar el historial guardado por maca?")) return;
   chrome.storage.local.remove(["history", "lastJob"], () => {
-    els.status.textContent = "âœ” Historial vaciado";
+    els.status.textContent = "✔ Historial vaciado";
     setTimeout(() => (els.status.textContent = ""), 2000);
   });
 });
@@ -820,9 +823,9 @@ els.exportConfig?.addEventListener("click", async () => {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    setStatus("ConfiguraciÃ³n exportada.");
+    setStatus("Configuración exportada.");
   } catch (_) {
-    setStatus("No se pudo exportar la configuraciÃ³n.");
+    setStatus("No se pudo exportar la configuración.");
   }
 });
 
@@ -837,13 +840,13 @@ els.importConfigFile?.addEventListener("change", async () => {
     const txt = await file.text();
     const parsed = JSON.parse(txt);
     if (!parsed || typeof parsed !== "object" || typeof parsed.sync !== "object") {
-      throw new Error("Formato invÃ¡lido");
+      throw new Error("Formato inválido");
     }
     await pSet("sync", parsed.sync || {});
     if (parsed.local && typeof parsed.local === "object" && typeof parsed.local.apiKey === "string") {
       await pSet("local", { apiKey: parsed.local.apiKey });
     }
-    setStatus("ConfiguraciÃ³n importada. Recargando...", { timeoutMs: 1200 });
+    setStatus("Configuración importada. Recargando...", { timeoutMs: 1200 });
     setTimeout(() => location.reload(), 1300);
   } catch (_) {
     setStatus("No se pudo importar el JSON.");
@@ -853,7 +856,7 @@ els.importConfigFile?.addEventListener("change", async () => {
 });
 
 els.reset.addEventListener("click", () => {
-  if (!confirm("Â¿Restablecer configuraciÃ³n?")) return;
+  if (!confirm("¿Restablecer configuración?")) return;
   chrome.storage.sync.clear(() => {
     chrome.storage.local.remove(["apiKey", "history", "lastJob", "metrics"], () => location.reload());
   });
@@ -865,4 +868,3 @@ try {
     setTimeout(() => document.getElementById("privacy")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
   }
 } catch (_) {}
-
