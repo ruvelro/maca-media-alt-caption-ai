@@ -11,7 +11,7 @@ import { isOpenRouterGlm, getOpenRouterGlmQualityPrompt } from "./shared.js";
 
 export { isOpenRouterGlm, getOpenRouterGlmQualityPrompt } from "./shared.js";
 
-export async function runProviderAnalysis({ cfg, finalPrompt, dataUrl, mime, mode, fetchWithTimeout, abortSignal, addDebugLog }) {
+export async function runProviderAnalysis({ cfg, finalPrompt, dataUrl, sourceImageUrl, mime, mode, fetchWithTimeout, abortSignal, addDebugLog }) {
   if (cfg.provider === "openai") {
     const { rawOutput } = await analyzeOpenAI({ cfg, finalPrompt, dataUrl, fetchWithTimeout, abortSignal });
     return pickOutputTextFromOpenAIResponse(rawOutput);
@@ -20,7 +20,7 @@ export async function runProviderAnalysis({ cfg, finalPrompt, dataUrl, mime, mod
     return (await analyzeGemini({ cfg, finalPrompt, dataUrl, mime, fetchWithTimeout, abortSignal })).rawOutput;
   }
   if (cfg.provider === "openrouter") {
-    return (await analyzeOpenRouter({ cfg, finalPrompt, dataUrl, mode, fetchWithTimeout, abortSignal, addDebugLog })).rawOutput;
+    return (await analyzeOpenRouter({ cfg, finalPrompt, dataUrl, sourceImageUrl, mode, fetchWithTimeout, abortSignal, addDebugLog })).rawOutput;
   }
   if (cfg.provider === "anthropic") {
     return (await analyzeAnthropic({ cfg, finalPrompt, dataUrl, mime, fetchWithTimeout, abortSignal })).rawOutput;

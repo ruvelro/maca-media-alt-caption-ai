@@ -26,7 +26,7 @@ test("chrome extension service worker loads and options page opens", async () =>
       optionsUrl: chrome.runtime.getURL("options.html")
     }));
 
-    expect(details.manifest.version).toBe("1.0.10");
+    expect(details.manifest.version).toBe("1.0.11");
     const page = await context.newPage();
     await page.goto(details.optionsUrl);
     await expect(page.locator("body")).toContainText("maca");

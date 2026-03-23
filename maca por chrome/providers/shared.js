@@ -28,6 +28,16 @@ export function isOpenRouterGlm(provider, model) {
   return String(provider || "") === "openrouter" && /glm/i.test(String(model || ""));
 }
 
+export function isOpenRouterGoogleModel(model) {
+  const m = String(model || "").toLowerCase();
+  return m.startsWith("google/") || m.includes("gemini");
+}
+
+export function isLikelyPublicHttpImageUrl(url) {
+  const s = String(url || "").trim();
+  return /^https?:\/\//i.test(s) && !/[?#]$/.test(s);
+}
+
 export function getOpenRouterGlmQualityPrompt(mode) {
   const m = String(mode || "both");
   const schema =
@@ -74,6 +84,28 @@ export function shouldFallbackOpenRouterCompatibility(status, json) {
     msg.includes("provider") ||
     msg.includes("unsupported parameter") ||
     msg.includes("invalid parameter")
+  );
+}
+
+export function shouldRetryOpenRouterImageCompatibility(status, json) {
+  if (status !== 400 && status !== 422) return false;
+  const msg = String(
+    json?.error?.message ||
+    json?.error ||
+    json?.message ||
+    json?.error?.metadata?.raw ||
+    json?.error?.metadata?.upstream_error ||
+    ""
+  ).toLowerCase();
+  return (
+    msg.includes("unable to process input image") ||
+    msg.includes("input image") ||
+    msg.includes("invalid image") ||
+    msg.includes("unsupported image") ||
+    msg.includes("image_url") ||
+    msg.includes("inline_data") ||
+    msg.includes("image format") ||
+    msg.includes("multimodal")
   );
 }
 

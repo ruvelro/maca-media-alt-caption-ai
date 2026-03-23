@@ -1345,6 +1345,7 @@ async function analyzeImage({
     cfg,
     finalPrompt,
     dataUrl,
+    sourceImageUrl: imageUrl,
     mime,
     mode,
     fetchWithTimeout,

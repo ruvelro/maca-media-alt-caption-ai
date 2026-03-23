@@ -10,7 +10,7 @@ La información general del proyecto, funciones, arquitectura y flujo de uso est
 ## Estado
 
 - Navegador: `Chrome / Chromium`
-- Versión: `1.0.10`
+- Versión: `1.0.11`
 - Carpeta de la extensión: `maca por chrome/`
 - Tipo: `Manifest V3`
 
@@ -33,7 +33,7 @@ La información general del proyecto, funciones, arquitectura y flujo de uso est
 
 Archivo preparado:
 
-- `../dist/chrome/maca-for-chrome-1.0.10.zip`
+- `../dist/chrome/maca-for-chrome-1.0.11.zip`
 
 Uso:
 
