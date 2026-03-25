@@ -146,6 +146,48 @@
     return "";
   }
 
+  function mergeContextParts(...vals) {
+    const out = [];
+    const seen = new Set();
+    for (const raw of vals) {
+      const v = String(raw || "").trim();
+      if (!v) continue;
+      const key = v.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(v);
+    }
+    return out.join(" | ");
+  }
+
+  function extractFilenameFromUrl(url) {
+    try {
+      const raw = String(url || "").trim();
+      if (!raw || raw.startsWith("data:") || raw.startsWith("blob:")) return "";
+      const u = new URL(raw, location.href);
+      const parts = u.pathname.split("/").filter(Boolean);
+      if (!parts.length) return "";
+      return decodeURIComponent(parts[parts.length - 1] || "");
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function getAttachmentFilenameContext(attEl, fallbackUrl = "") {
+    const fileName = firstTruthy(
+      attEl?.getAttribute?.("data-filename"),
+      attEl?.querySelector?.(".filename")?.textContent,
+      extractFilenameFromUrl(fallbackUrl)
+    );
+    const title = firstTruthy(
+      attEl?.getAttribute?.("data-title"),
+      attEl?.querySelector?.(".title")?.textContent,
+      attEl?.getAttribute?.("aria-label"),
+      attEl?.getAttribute?.("title")
+    );
+    return mergeContextParts(fileName, title);
+  }
+
   function resolveUrl(url) {
     if (!url) return "";
     try { return new URL(url, location.href).href; } catch (_) { return url; }
@@ -203,7 +245,8 @@
       const img = startEl;
       const url = img.currentSrc || img.getAttribute("src") || "";
       if (url) {
-        const ctx = firstTruthy(
+        const ctx = mergeContextParts(
+          extractFilenameFromUrl(url),
           img.getAttribute("alt"),
           img.getAttribute("title"),
           img.getAttribute("aria-label")
@@ -227,11 +270,12 @@
         el.getAttribute && el.getAttribute("data-full-url")
       );
       if (dataUrl) {
-        const ctx = firstTruthy(
+        const ctx = mergeContextParts(
+          el.getAttribute("data-filename"),
+          el.getAttribute("data-title"),
           el.getAttribute("aria-label"),
           el.getAttribute("title"),
-          el.getAttribute("data-title"),
-          el.getAttribute("data-filename")
+          extractFilenameFromUrl(dataUrl)
         );
         return { imageUrl: resolveUrl(dataUrl), filenameContext: ctx };
       }
@@ -241,7 +285,10 @@
       if (img) {
         const url = img.currentSrc || img.getAttribute("src") || "";
         if (url) {
-          const ctx = firstTruthy(
+          const ctx = mergeContextParts(
+            el.getAttribute && el.getAttribute("data-filename"),
+            extractFilenameFromUrl(url),
+            el.getAttribute && el.getAttribute("data-title"),
             img.getAttribute("alt"),
             img.getAttribute("title"),
             el.getAttribute && el.getAttribute("aria-label"),
@@ -254,11 +301,12 @@
       // background-image (WP uses this often for attachments)
       const bgUrl = getBgUrl(el);
       if (bgUrl) {
-        const ctx = firstTruthy(
-          el.getAttribute && el.getAttribute("aria-label"),
-          el.getAttribute && el.getAttribute("title"),
+        const ctx = mergeContextParts(
+          el.getAttribute && el.getAttribute("data-filename"),
+          extractFilenameFromUrl(bgUrl),
           el.getAttribute && el.getAttribute("data-title"),
-          el.getAttribute && el.getAttribute("data-filename")
+          el.getAttribute && el.getAttribute("aria-label"),
+          el.getAttribute && el.getAttribute("title")
         );
         return { imageUrl: resolveUrl(bgUrl), filenameContext: ctx };
       }
@@ -284,19 +332,13 @@
   function extractCandidateFromAttachmentEl(attEl) {
     if (!attEl) return null;
     const id = attEl.getAttribute("data-id") || attEl.dataset?.id || "";
-    const ctxText = firstTruthy(
-      attEl.getAttribute("aria-label"),
-      attEl.getAttribute("data-title"),
-      attEl.getAttribute("data-filename"),
-      attEl.querySelector(".filename")?.textContent,
-      attEl.querySelector(".title")?.textContent
-    );
+    const ctxText = getAttachmentFilenameContext(attEl);
 
     // Try <img> inside
     const img = attEl.querySelector("img");
     if (img) {
       const c = findCandidate(img);
-      if (c && c.imageUrl) return { id, imageUrl: c.imageUrl, filenameContext: firstTruthy(ctxText, c.filenameContext) };
+      if (c && c.imageUrl) return { id, imageUrl: c.imageUrl, filenameContext: mergeContextParts(ctxText, c.filenameContext) };
     }
 
     // Try background-image on thumbnail
@@ -721,9 +763,10 @@
     // Sometimes URL is in a readonly input.urlfield
     const urlField = details.querySelector("input.urlfield, input[name='attachments\\[\\d+\\]\\[url\\]']");
     if (urlField && urlField.value) {
-      const ctx = firstTruthy(
+      const ctx = mergeContextParts(
         details.querySelector(".filename")?.textContent,
-        details.querySelector(".title")?.textContent
+        details.querySelector(".title")?.textContent,
+        extractFilenameFromUrl(urlField.value)
       );
       return { imageUrl: resolveUrl(urlField.value), filenameContext: (ctx || "").trim() };
     }
@@ -745,7 +788,12 @@
       const img = thumb.querySelector("img") || null;
       if (img) {
         const c = findCandidate(img);
-        if (c && c.imageUrl) return c;
+        if (c && c.imageUrl) {
+          return {
+            imageUrl: c.imageUrl,
+            filenameContext: mergeContextParts(getAttachmentFilenameContext(selectedEl, c.imageUrl), c.filenameContext)
+          };
+        }
       }
       // Try background-image on .thumbnail or descendants
       const bgEl =
@@ -754,11 +802,7 @@
         thumb;
       const bgUrl = getBgUrl(bgEl) || getBgUrl(thumb);
       if (bgUrl) {
-        const ctx = firstTruthy(
-          selectedEl.getAttribute("aria-label"),
-          selectedEl.getAttribute("data-filename"),
-          selectedEl.getAttribute("data-title")
-        );
+        const ctx = getAttachmentFilenameContext(selectedEl, bgUrl);
         return { imageUrl: resolveUrl(bgUrl), filenameContext: ctx };
       }
       // Final attempt: findCandidate on selected tile
@@ -788,7 +832,7 @@
     if (!isStableAttachmentCandidate(detailsCand)) return null;
     return {
       imageUrl: detailsCand.imageUrl,
-      filenameContext: firstTruthy(direct?.filenameContext, detailsCand.filenameContext)
+      filenameContext: mergeContextParts(direct?.filenameContext, detailsCand.filenameContext)
     };
   }
 

@@ -1193,22 +1193,33 @@ if (chrome?.contextMenus?.onClicked?.addListener) chrome.contextMenus.onClicked.
       let imgUrl = info.srcUrl || "";
       let filenameContext = "";
 
-      if (inWp && !imgUrl) {
-        // Prefer the candidate pushed by the content script (works reliably inside iframes).
-        const pushed = __lastCandidateByTab.get(tabId);
-        if (pushed?.imageUrl) {
-          imgUrl = pushed.imageUrl;
-          filenameContext = pushed.filenameContext || "";
-        } else {
-          // Fallback to polling the content script (older builds / edge cases).
-          let candidate = null;
-          try {
-            candidate = await chrome.tabs.sendMessage(tabId, { type: "MACA_GET_LAST_CANDIDATE" });
-          } catch (_) {
-            candidate = null;
+      if (inWp) {
+        let selectedCandidate = null;
+        try {
+          selectedCandidate = await chrome.tabs.sendMessage(tabId, { type: "MACA_GET_SELECTED_CANDIDATE" });
+        } catch (_) {
+          selectedCandidate = null;
+        }
+        if (selectedCandidate?.ok && selectedCandidate.imageUrl) {
+          imgUrl = selectedCandidate.imageUrl;
+          filenameContext = selectedCandidate.filenameContext || "";
+        } else if (!imgUrl) {
+          // Prefer the candidate pushed by the content script (works reliably inside iframes).
+          const pushed = __lastCandidateByTab.get(tabId);
+          if (pushed?.imageUrl) {
+            imgUrl = pushed.imageUrl;
+            filenameContext = pushed.filenameContext || "";
+          } else {
+            // Fallback to polling the content script (older builds / edge cases).
+            let candidate = null;
+            try {
+              candidate = await chrome.tabs.sendMessage(tabId, { type: "MACA_GET_LAST_CANDIDATE" });
+            } catch (_) {
+              candidate = null;
+            }
+            imgUrl = candidate?.ok ? candidate.imageUrl : "";
+            filenameContext = candidate?.ok ? (candidate.filenameContext || "") : "";
           }
-          imgUrl = candidate?.ok ? candidate.imageUrl : "";
-          filenameContext = candidate?.ok ? (candidate.filenameContext || "") : "";
         }
       }
 
